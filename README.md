@@ -29,6 +29,7 @@ node tools/make-maps.js          # rebuild the map (about 2 minutes; only after 
 - `design.md`: what Syrinx is and how it works, with every parameter
 - `plan.md`: build batches, in order
 - `research.md`: the papers behind the design and the numbers taken from them
+- `tests.md`: test and experiment results per batch, with pictures in `docs/tests/`
 
 The design is shared with beak-tube in the doc *Syrinx and beak-tube: design and architecture*.
 `design.md` is this repo's copy of the Syrinx half.
