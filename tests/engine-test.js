@@ -405,7 +405,138 @@ function periodicity(x, f0, from, to) {
   check('Extremes: no NaN, output within ±1', ok && worst <= 1, 'peak ' + worst.toFixed(3));
 }
 
-check('42 parameters after batch 06', PARAMS.length === 42, PARAMS.length + '');
+// ---------- batch 07: musical lock ----------
+// pitch of every period (upward zero crossings of one source), in cents from a reference
+function periods(x, n, ref) {
+  const out = [];
+  let last = -1;
+  for (let i = 1; i < n; i++) if (x[i - 1] < 0 && x[i] >= 0) {
+    const t = i - 1 + -x[i - 1] / (x[i] - x[i - 1]);
+    if (last >= 0) out.push([t / OSR, cents(OSR / (t - last), ref)]);
+    last = t;
+  }
+  return out;
+}
+// average pitch of one source over a stretch, counted through a narrow band-pass on f (Q 8), so the
+// other side's tone in its waveform adds no crossings
+function bandPitch(x, f, from, to) {
+  const g = Math.tan(Math.PI * f / OSR), k = 1 / 8, a1 = 1 / (1 + g * (g + k)), a2 = g * a1, a3 = g * a2;
+  let c1 = 0, c2 = 0, env = 0, armed = false, first = -1, lastT = -1, count = 0, prev = 0;
+  for (let i = 0; i < to; i++) {
+    const v3 = x[i] - c2, v1 = a1 * c1 + a2 * v3, v2 = c2 + a2 * c1 + a3 * v3;
+    c1 = 2 * v1 - c1; c2 = 2 * v2 - c2;
+    const y = k * v1;
+    env = Math.max(Math.abs(y), env * (1 - 2 * f / OSR));
+    if (i >= from) {
+      if (armed && y >= 0) { const t = i - 1 + -prev / (y - prev); if (first < 0) first = t; else count++; lastT = t; armed = false; }
+      else if (!armed && y < -0.3 * env) armed = true;
+    }
+    prev = y;
+  }
+  return count > 0 ? OSR * count / (lastT - first) : 0;
+}
+const LOCKED = { lock: 1, grain: 0, sustain: 1, transpose: 36 };
+
+// 26. locked syllables start and end on semitones; Stepped passes only semitones; jitter moves no pitch
+{
+  const run = (gs) => {
+    const r = tapRun(Object.assign({}, LOCKED, { glidestyle: gs, pattern: 1, sylrate: 4, duty: 0.5, minibreath: 0, shape: 1, sweep: 0.37, jitter: 1, regime: 0, link: 0, sync: 1 }), 1.6, [[60]]);
+    r.e.setTempo(120);
+    return { pts: periods(r.tap.s0, r.tap.n, midiHz(96)).filter(p => p[0] > 0.25), onsets: r.e.onsets.map(o => o / OSR) };
+  };
+  const sm = run(0), st = run(1);
+  const inSyl = (p, on, a, b) => on.some(o => p[0] - o > a && p[0] - o < b);
+  const avg = (a) => a.reduce((s, p) => s + p[1], 0) / a.length;
+  const endSm = avg(sm.pts.filter(p => inSyl(p, sm.onsets, 0.15, 0.24)));            // after the syllable's sweep: held at its end
+  const endSt = avg(st.pts.filter(p => inSyl(p, st.onsets, 0.15, 0.24)));
+  const startSt = st.pts.filter(p => inSyl(p, st.onsets, 0.0015, 0.007));               // Stepped's first step is the note itself
+  const worstStart = Math.max(...startSt.map(p => Math.abs(p[1])));
+  check('Lock: syllables end on a semitone (sweep 0.37 oct → 4 semitones)', Math.abs(endSm - 400) < 1 && Math.abs(endSt - 400) < 1, 'Smooth ' + endSm.toFixed(2) + ', Stepped ' + endSt.toFixed(2) + ' cents');
+  check('Lock: syllables start on the note, Jitter 1 moves no pitch', worstStart < 1, 'first step within ' + worstStart.toFixed(2) + ' cents');
+  const share = (pts) => pts.filter(p => Math.abs(p[1] - 100 * Math.round(p[1] / 100)) < 10).length / pts.length;
+  const sSm = share(sm.pts), sSt = share(st.pts);
+  check('Lock: Stepped passes only semitones', sSt > 0.97 && sSm < 0.8, 'periods within 10 cents of a semitone: Stepped ' + (100 * sSt).toFixed(0) + '%, Smooth ' + (100 * sSm).toFixed(0) + '%');
+}
+
+// 27. the pitch keeper holds both sides at full Coupling
+{
+  let worstOn = 0, worstOff = 0, where = '';
+  for (const n of [36, 48, 60, 72]) for (const iv of [3, 4, 5, 7, 9, 12, -5]) {
+    const f0 = midiHz(n + 36), f1 = midiHz(n + 36 + iv);
+    for (const lock of [0, 1]) {
+      const r = tapRun({ lock, transpose: 36, playmode: 1, interval: iv, coupling: 1 }, 1.4, [[n]]);
+      const a = Math.round(0.6 * OSR), b = Math.round(1.4 * OSR);
+      const d = Math.max(Math.abs(cents(bandPitch(r.tap.s0, f0, a, b), f0)), Math.abs(cents(bandPitch(r.tap.s1, f1, a, b), f1)));
+      if (lock) { if (d > worstOn) { worstOn = d; where = 'note ' + n + ', interval ' + iv; } } else worstOff = Math.max(worstOff, Number.isFinite(d) ? d : 1200);
+    }
+  }
+  check('Lock: the keeper holds both sides within 5 cents at full Coupling', worstOn < 5, 'worst ' + worstOn.toFixed(1) + ' cents (' + where + '); unlocked up to ' + worstOff.toFixed(0));
+}
+
+// 28. the keeper in Triple and Single, and against the tube at full Jumps
+{
+  const f = midiHz(96);
+  const hold = (p, lock) => { const r = tapRun(Object.assign({ lock, transpose: 36 }, p), 1.4, [[60]]); return Math.abs(cents(bandPitch(r.tap.s0, f, Math.round(0.6 * OSR), Math.round(1.4 * OSR)), f)); };
+  const t0 = hold({ topology: 2, coupling: 1 }, 0), t1 = hold({ topology: 2, coupling: 1 }, 1);
+  const s0 = hold({ topology: 1, asym: 0.3, coupling: 1 }, 0), s1 = hold({ topology: 1, asym: 0.3, coupling: 1 }, 1);
+  check('Lock: Triple and Single held on the note', t1 < 2 && s1 < 2, 'Triple ' + t0.toFixed(0) + ' → ' + t1.toFixed(1) + ' cents, Single ' + s0.toFixed(0) + ' → ' + s1.toFixed(1));
+  const secs = 6, N = secs * 48000, want = midiHz(104);
+  const r = tapRun(Object.assign({}, LOCKED, { regime: 0, link: 0, jumps: 1, filter: 0, trachea: 4 }), secs, [[68]], (e, i) => { const u = i / N; e.setParam('trachea', u < 0.5 ? 4 + 6 * u : 7 - 6 * (u - 0.5)); });
+  let worst = 0, off = 0, all = 0;
+  for (let s0 = Math.round(0.2 * OSR); s0 + 0.02 * OSR <= r.tap.n; s0 += Math.round(0.02 * OSR)) {
+    const c = Math.abs(cents(zfreq(r.tap.s0, OSR, s0, s0 + Math.round(0.02 * OSR)), want));
+    worst = Math.max(worst, c); all++; if (c > 2) off++;
+  }
+  check('Lock: a slow tube sweep at full Jumps stays on the note (a short break where it would jump)', worst < 10 && off / all < 0.05, (100 * (1 - off / all)).toFixed(0) + '% of 20 ms windows within 2 cents, worst ' + worst.toFixed(1) + ' (unlocked: jumps of an octave)');
+}
+
+// 29. Interval and Breath bend under Lock
+{
+  const e = new SyrinxEngine(48000, 1);
+  apply(e, { lock: 1, playmode: 1, interval: 7.3 }); e.noteOn(60, 100);
+  const L = new Float32Array(128); e.process(L, L, 128);
+  const v = e.voices[0], iv = 12 * Math.log2(v.fNow[1] / v.fNow[0]);
+  const bb = (lock) => { const r = tapRun({ lock, transpose: 36, breathbend: 1, attack: 0.05, decay: 0.05, sustain: 0.5, regime: 0, link: 0 }, 0.6, [[60]]); return cents(bandPitch(r.tap.s0, midiHz(96) * (lock ? 1 : Math.pow(2, -0.5)), Math.round(0.3 * OSR), Math.round(0.6 * OSR)), midiHz(96)); };
+  const b0 = bb(0), b1 = bb(1);
+  check('Lock: Interval in whole semitones; Breath bend only scoops the attack', Math.abs(iv - 7) < 1e-9 && Math.abs(b1) < 1 && Math.abs(b0 + 600) < 5, 'interval ' + iv.toFixed(3) + ' st; at Sustain 0.5 unlocked ' + b0.toFixed(0) + ' cents, locked ' + b1.toFixed(2));
+}
+
+// 30. Size: whole octaves under Lock; Tempo lock keeps or slows the syllables
+{
+  const oct = (p) => { const e = new SyrinxEngine(48000, 1); apply(e, p); e.noteOn(60, 100); const L = new Float32Array(128); e.process(L, L, 128); return Math.log2(e.voices[0].fNow[0] / midiHz(96)); };
+  const u = oct({ size: 0.6 }), l = oct({ size: 0.6, lock: 1 }), big = oct({ size: 1 });
+  check('Size: continuous, whole octaves with Lock', Math.abs(u + 0.9333) < 1e-3 && Math.abs(l + 1) < 1e-9 && Math.abs(big + 2) < 1e-9, 'Size 0.6: ' + u.toFixed(3) + ' oct, locked ' + l.toFixed(3) + '; Size 1: ' + big.toFixed(3));
+  const rate = (tl) => { const r = tapRun({ size: 1, tempolock: tl, pattern: 1, sylrate: 8, jitter: 0 }, 2.1, [[60]]); const o = r.e.onsets; return (o.length - 1) / ((o[o.length - 1] - o[0]) / OSR); };
+  const r1 = rate(1), r0 = rate(0);
+  check('Tempo lock: kept at 100%, slowed with Size at 0%', Math.abs(r1 - 8) < 0.01 && Math.abs(r0 - 2) < 0.01, r1.toFixed(3) + ' and ' + r0.toFixed(3) + ' syllables/s at Size 1');
+}
+
+// 31. Sync: syllables stay on the beat grid even with Jitter
+{
+  const r = tapRun({ pattern: 1, sync: 1, sylrate: 7, jitter: 1 }, 1.2, [[60]], (e, i) => { if (i === 0) e.setTempo(120); });
+  const o = r.e.onsets, step = OSR / 8;                                 // 120 bpm, 4 per beat → 8/s
+  let worst = 0; for (let i = 1; i < o.length; i++) worst = Math.max(worst, Math.abs(o[i] - o[0] - i * step));
+  check('Sync: syllables on the beat grid with Jitter 1', worst <= 1 && o.length >= 9, o.length + ' syllables, worst ' + worst + ' samples off at 4x');
+}
+
+// 32. Stepped glide in Mono runs in semitones
+{
+  const want = midiHz(96);
+  const run = (gs) => { const r = tapRun(Object.assign({}, LOCKED, { glidestyle: gs, glide: 0.3, regime: 0, link: 0 }), 0.9, [[60]], (e, i) => { if (i <= 14400 && 14400 < i + 128) e.noteOn(67, 100); }); return periods(r.tap.s0, r.tap.n, want).filter(p => p[0] > 0.32 && p[0] < 0.6); };
+  const share = (pts) => pts.filter(p => Math.abs(p[1] - 100 * Math.round(p[1] / 100)) < 10).length / pts.length;
+  const a = share(run(1)), b = share(run(0));
+  check('Lock: Stepped glide runs through semitones', a > 0.95 && b < 0.5, 'periods on a semitone: Stepped ' + (100 * a).toFixed(0) + '%, Smooth ' + (100 * b).toFixed(0) + '%');
+}
+
+// 33. the keeper keeps the engine deterministic at any buffer size
+{
+  const go = (bl) => render(48000, 0.6, e => { apply(e, { lock: 1, glidestyle: 1, playmode: 1, coupling: 1, jumps: 1, pattern: 1, sylrate: 9, jitter: 0.5 }); e.noteOn(60, 100); }, bl).L;
+  const a = go(1), b = go(64), c = go(1000);
+  let same = true; for (let i = 0; i < a.length; i++) if (a[i] !== b[i] || a[i] !== c[i]) { same = false; break; }
+  check('Lock: same output at buffer sizes 1, 64, 1000', same);
+}
+
+check('46 parameters after batch 07', PARAMS.length === 46, PARAMS.length + '');
 
 console.log(failed ? failed + ' failed' : 'all passed');
 process.exit(failed ? 1 : 0);

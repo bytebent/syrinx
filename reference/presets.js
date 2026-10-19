@@ -124,6 +124,32 @@
       phrase: [[60, 0, 0.5], [64, 0.55, 0.5], [67, 1.1, 0.7], [60, 2.0, 0.5], [64, 2.55, 0.5], [67, 3.1, 0.7]],
       switchAt: { time: 1.9, id: 'filter', value: 1 },
     },
+    {
+      name: 'Locked trill (Stepped)',
+      about: 'Lock on, Glide style Stepped: a trill whose up-sweeps run in semitone steps, over a C major arpeggio.',
+      params: { lock: 1, glidestyle: 1, pattern: 1, sylrate: 10, duty: 0.7, shape: 1, sweep: 0.42, regime: 0.2, attack: 0.01, release: 0.08 },
+      phrase: [[60, 0, 0.8], [64, 0.8, 0.8], [67, 1.6, 0.8], [72, 2.4, 1.0]],
+    },
+    {
+      name: 'Locked song (Smooth)',
+      about: 'Lock on, Glide style Smooth: swooping syllables that leave and land exactly on the notes of a melody.',
+      params: { lock: 1, pattern: 1, sylrate: 5, duty: 0.75, shape: 3, sweep: 0.25, jitter: 0.3, attack: 0.01, release: 0.1 },
+      phrase: [[67, 0, 0.6], [69, 0.6, 0.6], [67, 1.2, 0.6], [64, 1.8, 1.2], [62, 3.0, 0.6], [60, 3.6, 1.0]],
+    },
+    {
+      name: 'Coupled sixth (Lock off → on)',
+      about: 'Two sides a major sixth apart at Coupling 1: out of tune and rough with Lock off; Lock switches on at 2.1 s and the keeper pulls both onto their notes.',
+      params: { playmode: 1, interval: 9, coupling: 1, attack: 0.02, release: 0.1 },
+      phrase: [[55, 0, 2.0], [55, 2.1, 2.0]],
+      switchAt: { time: 2.05, id: 'lock', value: 1 },
+    },
+    {
+      name: 'Size sweep (Lock)',
+      about: 'Size from wren to crane with Lock on: the bird drops in whole octaves, its trill slowing as Tempo lock is 50%.',
+      params: { lock: 1, pattern: 1, sylrate: 12, shape: 2, sweep: 0.5, size: 0, tempolock: 0.5, attack: 0.02, release: 0.1 },
+      phrase: [[60, 0, 4.0]],
+      sweep: { id: 'size', from: 0, to: 1 },
+    },
   ];
   if (typeof module !== 'undefined' && module.exports) module.exports = { PRESETS };
   else root.SyrinxPresets = PRESETS;

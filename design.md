@@ -225,11 +225,35 @@ bird-speed sweeps and trills. There is no key or scale: the notes played choose 
 | Pitch bend wheel | Free | Free |
 
 **Pitch keeper:** each source measures its actual period every block and corrects γ. A jump then
-becomes a short break that settles back on the note, or, with Jumps high, a jump to the nearest
-semitone. With Sync on, syllable rate and sweep time follow the host tempo.
+becomes a short break that settles back on the note. With Sync on, syllable rate and sweep time
+follow the host tempo.
 
-[Open] Whether Lock defaults to On; whether the Stepped run's speed follows Sweep time or has
-its own control.
+How it is built (batch 07):
+
+- The keeper counts the periods a source really makes, through a band-pass on its own pitch (Q 8,
+  so the other side's tone adds no crossings), against the cycles its commanded pitch should make
+  over the same stretch. Both count the same stretch, so sweeps and Wobble do not fool it. It
+  measures over 8 periods and corrects a little each period. After a step in the target (a
+  Stepped run, a syllable start) it starts over and skips 4 periods while the band-pass settles.
+- Single measures its two folds together; Triple keeps the labia on the note and lets the
+  membrane lock to them.
+- A correction is limited to 3 semitones. A source still off at that limit has been captured,
+  usually by the other side in a close interval: it stays there, moved onto the nearest semitone
+  (two sides a whole tone apart high up merge into a unison on the upper note).
+- With Lock on, **Coupling covers 0–0.35** of its unlocked strength and **Jumps 0–0.7**. Above
+  that the keeper could not hold: the sides lock onto one pitch and wobble, or the tube owns the
+  pitch and γ no longer steers it. So "a jump to the nearest semitone" from the first design is
+  dropped: under Lock a jump is always a short break that settles back.
+- The keeper holds both sides within about 1 cent at full Coupling (all intervals from a minor
+  third to an octave, across the range), Triple and Single within 0.1 cent. A coupled fifth beats
+  slowly, like a tempered fifth on any instrument: the sides would lock to a pure 3:2, 2 cents wider.
+- Sync keeps syllables on the beat grid, so Jitter no longer moves their timing; Lock removes its
+  pitch part. The Stepped run's speed follows Sweep (and Glide): no own control. [Decided]
+- Strong Coupling could freeze a tonal side while the other buzzed at a few hundred Hz (with or
+  without Lock). The push from the other sources now never swings the drive by more than 80% of
+  itself; nothing else changes below Coupling 0.4.
+
+[Open] Whether Lock defaults to On.
 
 ## 8. Size
 
@@ -242,13 +266,16 @@ tonal; beak-tube's Size scales its tube to match. Regime, Coupling and Wobble ra
   swans and cranes). Pitch comes from the syrinx, not the trachea, so Syrinx's pitch and
   beak-tube's trachea length can be pushed apart freely.
 
+Built in batch 07: Size moves pitch by −(Size − 0.25) × 8/3 octaves (wren +⅔ octave, crane −2
+octaves), whole octaves with Lock, and moves Split, the Link band and the internal trachea with it.
+
 **Tempo lock** decides what Size does to timing: at 100% syllable rate and sweep speed stay; at
 0% they slow with size. Default 50%. [Open: needs a listening test] Playing lower notes or
 Transpose never changes timing.
 
 ## 9. Parameters
 
-44 parameters plus the 2 of Musical lock. Same id style and knob curves as Dolphin. LFOs:
+44 parameters plus the 2 of Musical lock, all in the reference engine since batch 07. Same id style and knob curves as Dolphin. LFOs:
 [Open] decided after testing. Defaults are design values to tune by ear unless the text gives a
 source. Ranges may go somewhat past nature.
 

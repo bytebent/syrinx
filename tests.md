@@ -174,3 +174,48 @@ New presets 17–19:
 ![presets 17–19](docs/tests/06-presets.png)
 
 **You:** listen to presets 17–19.
+
+## Batch 07 · musical lock, Size
+
+Experiments:
+
+- The keeper first counted single periods on the raw source. Under coupling the other side's tone
+  added crossings, and the keepers of the two sides fought: up to 300 cents off. Fixed with a
+  band-pass on each source's own pitch, an 8-period window, and arming relative to the signal's
+  amplitude.
+- Strong Coupling (above about 0.85) froze a tonal side while the other buzzed near 300 Hz, Lock or
+  not. The coupling push is now limited to 80% of the drive.
+- How far Lock can hold: Coupling up to about 0.35 (above, the sides merge into one pitch and
+  wobble 40 cents), Jumps up to about 0.7 (above, the tube owns the pitch). Lock scales both knobs
+  to those ranges.
+- Captured sources (a whole tone apart, high up) now settle in unison on a semitone instead of
+  winding the correction up.
+- After a Stepped step the keeper's band-pass rings for a couple of milliseconds; skipping 4 periods
+  after each step took the overshoot from 10 cents to 0.3.
+
+Benchmark: Lock adds about 1% per voice (4.4% for two coupled sides, 14.1% at the worst case).
+
+Tests (new):
+
+- Locked syllables end on a semitone (400.00 cents), start on the note, Jitter moves no pitch. ✓
+- Stepped: 99% of periods within 10 cents of a semitone (Smooth 62%). ✓
+- Keeper at full Coupling, 28 note and interval pairs: worst 1.0 cent (unlocked up to 880). ✓
+- Triple 300 → 0 cents, Single 11 → 0 cents. ✓
+- Jumps 1 tube sweep: 96% of windows within 2 cents, worst 8 cents where it would jump. ✓
+- Interval 7.3 plays 7; Breath bend only scoops the attack. ✓
+- Size: −0.933 octave at 0.6, −1 with Lock; Tempo lock 100% keeps 8/s, 0% slows to 2/s at Size 1. ✓
+- Sync: syllables on the beat grid with Jitter 1. ✓
+- Stepped glide 98% on semitones (Smooth 20%). ✓
+- Same output at buffer sizes 1, 64, 1000 with Lock. ✓
+
+Locked syllables, the keeper at full Coupling, a Jumps 1 tube sweep with Lock off and on:
+
+![lock](docs/tests/07-lock.png)
+
+![glide](docs/tests/07-glide.png)
+
+New presets 20–23:
+
+![presets 20–23](docs/tests/07-presets.png)
+
+**You:** listen to presets 20–23.

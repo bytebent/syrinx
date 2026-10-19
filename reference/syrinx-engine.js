@@ -1,5 +1,5 @@
 /*
- * Syrinx engine v0.2 · bytebent
+ * Syrinx engine v0.3 · bytebent
  *
  * A bird voice. Each voice is a syrinx with one, two or three sound sources. A labial source is
  * the normal form of the Mindlin group's model (Sitt et al. 2010; Perl et al. 2011), a
@@ -20,8 +20,13 @@
  *     sample accuracy; minibreaths drop the drive between slow syllables; Wobble is superfast
  *     muscle modulation, up to 250 Hz.
  *
- * Batches 02–05 (see plan.md). The internal trachea with Jumps and Chaos, the Filter, Lock and
- * Size come later.
+ *   - Internal trachea: a delay line per voice; its reflection reaches the drive (Jumps, Chaos) and,
+ *     with Filter on, what leaves its far end is the sound.
+ *   - Lock: every pitch lands on a semitone; a pitch keeper measures each source's period and
+ *     corrects γ, so coupling and tube feedback cannot pull a note out of tune.
+ *   - Size moves the whole bird: pitch range, Split, the Link band and the tube length.
+ *
+ * Batches 02–07 (see plan.md).
  *
  * All sources of a voice are integrated together, RK4 at 4x the host rate, with a shared number
  * of sub-steps that keeps every step at or below 0.1 time units (pitch error under 0.1 cent), in
@@ -38,6 +43,7 @@
   const FIR_LEN = 128;          // decimation filter taps (at 4x rate)
   const MAX_VOICES = 4;         // Poly voices (batch 03: worst case about 11% of a core per voice)
   const TWO_PI = 2 * Math.PI;
+  const LOG2_440 = Math.log2(440);
 
   /* ---------- the model and its map ---------- */
   const BETA_LO = -0.4, BETA_HI = 0.4;     // Regime 0 → 1
@@ -156,7 +162,7 @@
 
   // ids, defaults and ranges: the one table the C++ core and the UI copy.
   // log: the knob moves logarithmically; curve: knob position^curve; step: whole steps.
-  // Batches 02–05; the rest of design.md §9 arrives batch by batch.
+  // All of design.md §9 (batches 02–07).
   const PARAMS = [
     // source
     { id: 'topology', def: 0, min: 0, max: 2, step: 1 },     // Duplex, Single, Triple
@@ -205,14 +211,21 @@
     { id: 'glide', def: 0.02, min: 0, max: 2, curve: 3 },    // s, mono only
     { id: 'bendrange', def: 12, min: 2, max: 48, step: 1 },
     { id: 'mode', def: 0, min: 0, max: 1, step: 1 },         // 0 mono, 1 poly (4 voices)
+    { id: 'size', def: 0.25, min: 0, max: 1 },               // wren (0) to crane (1); 0.25 songbird
+    { id: 'tempolock', def: 0.5, min: 0, max: 1 },           // 1 keeps syllable timing at any Size, 0 slows it with Size
     { id: 'filter', def: 1, min: 0, max: 1, step: 1 },       // internal trachea and tracking resonance on the output
     { id: 'volume', def: -6, min: -48, max: 6 },             // dB
+    // musical lock
+    { id: 'lock', def: 0, min: 0, max: 1, step: 1 },         // every pitch on a semitone
+    { id: 'glidestyle', def: 0, min: 0, max: 1, step: 1 },   // Smooth, Stepped (a chromatic run)
   ];
   const PINDEX = {};
   PARAMS.forEach((p, i) => { PINDEX[p.id] = i; });
 
   const SYL_DIVS = [0.25, 0.5, 1, 1.5, 2, 3, 4, 6, 8, 12, 16, 24, 32];   // syllables per beat (Sync)
   const COUPLE_DC = 0.002;                 // coupling acts on drive + this, so tonal sources feel it too
+  const COUPLE_MAX = 0.8;                  // the push from the other sources never swings the drive past this share of itself
+                                           // (beyond it a tonal side froze and the other relaxed at a few hundred Hz)
   const MEM_LEVEL = 0.6;                   // membrane output against the labia
   const WOBBLE_CENTS = 200;                // pitch depth of Wobble at full
   const GATE_MS = 1.5;                     // side and syllable gate time, at most
@@ -236,6 +249,22 @@
   const FILTER_GAIN = 2.8;                 // level match, Filter on against off (average over notes and Regime)
   const SINGLE_PULL = 0.05;                 // Single: fold pull at Coupling 0 is 0.3 × this
   const SINGLE_CENTS = 300;                // Single: fold detuning at full Asymmetry (they stop locking past about 1 semitone)
+  const SIZE_OCT = 8 / 3;                  // octaves down per unit of Size above 0.25 (crane: 2 octaves under a songbird)
+  // pitch keeper (Lock): counts the periods each source really makes against the cycles its
+  // commanded pitch should make, and corrects γ. Sweep-proof, since both count the same stretch.
+  const KEEP_G = 0.06;                     // correction per measured period (slow enough for an 8-period window)
+  const KEEP_K = 8;                        // periods per measurement (one period alone misses an occasional extra crossing)
+  const KEEP_ARM = 0.3;                    // a period ends at an upward zero crossing after dipping below −this × its amplitude
+  const KEEP_MAX = 0.25;                   // octaves of correction, at most; a source still off at the limit has been captured
+  const KEEP_RING = 16;
+  const KEEP_STEP = 0.02;                  // octaves per block: a faster change of the target is a step (Stepped runs,
+  const KEEP_HOLD = 4;                     // syllable starts); the keeper starts over and skips this many periods
+                                           // while its band-pass settles
+  const LOCK_JUMPS = 0.7;                  // Lock: Jumps covers the part the keeper can hold (above it the tube owns the pitch
+                                           // and γ no longer steers it)
+  const LOCK_COUPLING = 0.35;              // Lock: Coupling covers the part the keeper can hold (above it the sides lock onto one pitch and wobble)
+  const KEEP_Q = 8;                        // the keeper listens through a band-pass on the source's own pitch,
+                                           // so another source's tone in its waveform does not add crossings
 
   function toNorm(d, v) {
     if (d.log) return Math.log(v / d.min) / Math.log(d.max / d.min);
@@ -300,6 +329,13 @@
       this.sideNote = new Int32Array(2); this.sideHeld = new Uint8Array(2);
       this.patGate = new Float32Array(BLOCK * OS);
       this.tube = new Float64Array(TUBE_N);
+      // pitch keeper per labial source
+      this.corr = new Float64Array(2); this.aim = new Float64Array(2); this.kph = new Float64Array(2);
+      this.khz = new Float64Array(2); this.kring = new Float64Array(2 * KEEP_RING);
+      this.kcount = new Int32Array(2); this.knew = new Int32Array(2); this.karm = new Uint8Array(2); this.kprev = new Float64Array(2);
+      this.kb = new Float64Array(4);       // band-pass state, two per source
+      this.kenv = new Float64Array(2);     // amplitude after the band-pass
+      this.khold = new Int32Array(2);
       this.fNow = new Float64Array(3); this.subNow = 0; this.regimeNow = 0; this.driveNow = 0; this.sciNow = 1; this.gammaNow = 0;
       this.reset();
     }
@@ -316,6 +352,40 @@
       this.pPhase = 0; this.sylRate = 8; this.sylPitch = 0; this.sylSweep = 0; this.sylSide = 1; this.sylCount = 0;
       this.contour0 = 0;
       this.tube.fill(0); this.tw = 0; this.tlp = 0; this.Tsm = 0; this.ic1 = 0; this.ic2 = 0;
+      this.resetKeeper();
+    }
+    resetKeeper() {
+      this.corr.fill(0); this.aim.fill(0); this.kph.fill(0); this.khz.fill(0);
+      this.kcount.fill(0); this.knew.fill(0); this.karm.fill(0); this.kprev.fill(0); this.kb.fill(0); this.kenv.fill(0); this.khold.fill(0);
+    }
+    // a period has ended at expected-cycle count ph
+    keepCross(j, ph) {
+      if (this.khold[j] > 0) { this.khold[j]--; return; }
+      const o = j * KEEP_RING, n = this.kcount[j];
+      if (n > 0) {
+        const gap = ph - this.kring[o + (n - 1) % KEEP_RING];
+        if (gap > 2.5 || gap < 0.3) this.kcount[j] = 0;                      // the source stopped, or a spurious crossing
+      }
+      const m = this.kcount[j];
+      this.kring[o + m % KEEP_RING] = ph;
+      this.kcount[j] = m + 1; this.knew[j]++;
+    }
+    // block end: correct γ from the last KEEP_K periods
+    keepUpdate(j) {
+      const n = this.kcount[j], fresh = this.knew[j];
+      this.knew[j] = 0;
+      if (fresh === 0 || n <= KEEP_K) return;
+      const o = j * KEEP_RING;
+      const span = this.kring[o + (n - 1) % KEEP_RING] - this.kring[o + (n - 1 - KEEP_K) % KEEP_RING];
+      if (!(span > 0)) return;
+      const err = Math.log2(KEEP_K / span);                                  // octaves: measured against intended (with the correction)
+      // Small pulls go back onto the note. A source still off with the correction at its limit has jumped
+      // (tube feedback) or been captured by another source (coupling): it stays where it is, moved onto the
+      // nearest semitone, instead of winding up against it. When the pull goes away it returns to the note.
+      const e12 = 12 * err, nat = 12 * (err - this.corr[j]);
+      if (Math.abs(this.corr[j]) >= KEEP_MAX - 1e-6) { if (Math.abs(e12 - 12 * this.aim[j]) > 0.5) this.aim[j] = Math.round(e12) / 12; }
+      else if (this.aim[j] !== 0 && Math.abs(nat) < 0.5) this.aim[j] = 0;
+      this.corr[j] = clamp(this.corr[j] - Math.min(1, KEEP_G * fresh) * (err - this.aim[j]), -KEEP_MAX, KEEP_MAX);
     }
     rand() {
       let x = this.rng;
@@ -352,6 +422,7 @@
         this.x[2] = 0.1; this.y[2] = 0;
         this.gp = 0; this.pPhase = 0; this.wobPh = 0;
         this.tube.fill(0); this.tw = 0; this.tlp = 0; this.Tsm = 0; this.ic1 = 0; this.ic2 = 0;
+        this.resetKeeper();
         this.newSyllable(true);
       }
       this.stage = 1; this.held = true; this.age = ++this.e.ageCounter;
@@ -361,7 +432,8 @@
     // syllable rate now: free or synced to tempo
     baseRate() {
       const e = this.e, P = e.p;
-      let r = P[PINDEX.sylrate];
+      // a bigger bird sings slower unless Tempo lock holds the timing
+      let r = P[PINDEX.sylrate] * Math.pow(2, e.sizeOct * (1 - P[PINDEX.tempolock]));
       if (P[PINDEX.sync] >= 0.5) {
         const bps = e.tempo / 60;
         let best = SYL_DIVS[0] * bps, bd = Infinity;
@@ -371,24 +443,27 @@
       return r;
     }
     newSyllable(first) {
-      const e = this.e, P = e.p, jit = P[PINDEX.jitter];
+      const e = this.e, P = e.p, jit = P[PINDEX.jitter], lock = P[PINDEX.lock] >= 0.5;
       const base = this.baseRate();
-      this.sylRate = jit > 0 ? base * clamp(1 + jit * 0.25 * this.gauss(), 0.5, 1.5) : base;
-      this.sylPitch = jit > 0 ? jit * (0.5 / 12) * this.gauss() : 0;
+      // Sync keeps syllables on the beat grid (no timing jitter); Lock keeps them on the note (no pitch jitter)
+      this.sylRate = jit > 0 && P[PINDEX.sync] < 0.5 ? base * clamp(1 + jit * 0.25 * this.gauss(), 0.5, 1.5) : base;
+      this.sylPitch = jit > 0 && !lock ? jit * (0.5 / 12) * this.gauss() : 0;
       if (!first) this.sylSide = 1 - this.sylSide; else this.sylSide = 0;
       // trill limit: shrink the sweep until the syllable's bandwidth is under Podos's line
       let sw = P[PINDEX.sweep];
       const trill = P[PINDEX.trill], shape = Math.round(P[PINDEX.shape]);
       if (trill > 0 && sw !== 0 && shape !== 0) {
-        const f = Math.pow(2, this.logF[0]), [lo, hi] = SHAPE_RANGE[shape];
+        const f = Math.pow(2, this.logF[0] + e.sizeOct), [lo, hi] = SHAPE_RANGE[shape];
         const bwMax = podosBandwidth(this.sylRate) / trill;
         const bw = (s) => f * (Math.pow(2, Math.max(s * lo, s * hi)) - Math.pow(2, Math.min(s * lo, s * hi)));
         if (bw(sw) > bwMax) {
           let a = 0, b = Math.abs(sw);
           for (let i = 0; i < 30; i++) { const m = 0.5 * (a + b); if (bw(Math.sign(sw) * m) > bwMax) b = m; else a = m; }
           sw = Math.sign(sw) * a;
+          if (lock) sw = Math.sign(sw) * Math.floor(a * 12 + 1e-9) / 12;      // locked: whole semitones, still under the limit
         }
       }
+      if (lock) sw = Math.round(sw * 12) / 12;                               // starts on the note, ends on a semitone
       this.sylSweep = sw;
       this.sylCount++;
       if (e.onsets) e.onsets.push(e.osTime);
@@ -424,7 +499,8 @@
     setupLabial(j, logHz, regBase, E, gamma, out) {
       const e = this.e, P = e.p;
       const hz = Math.pow(2, logHz);
-      const rNote = clamp((Math.log2(LINK_HI) - logHz) / (Math.log2(LINK_HI) - Math.log2(LINK_LO)), 0, 1);
+      const lz = logHz - e.sizeOct;                                          // Size moves the Link band with the bird
+      const rNote = clamp((Math.log2(LINK_HI) - lz) / (Math.log2(LINK_HI) - Math.log2(LINK_LO)), 0, 1);
       let reg = clamp(regBase + P[PINDEX.link] * (rNote - regBase), 0, 1);
       reg += P[PINDEX.chaos] * Math.max(0, CHAOS_REG - reg);                 // Chaos wants a rich source, after Link
       const dPath = D_HOPF * Math.pow(D_SNILC / D_HOPF, reg);
@@ -466,15 +542,22 @@
       const mb = P[PINDEX.minibreath] * clamp((30 - rate) / 5, 0, 1);
 
       // side pitches (log2 Hz) at block end
-      const common = e.bendOct + P[PINDEX.breathbend] * (E - 1) + contour1;
-      let lL = this.logF[0] + common;
+      const lock = P[PINDEX.lock] >= 0.5, stepped = lock && P[PINDEX.glidestyle] >= 0.5;
+      // Lock: Breath bend is a scoop in the attack only; Stepped runs every sweep and glide in semitones
+      const bend = lock && this.stage !== 1 ? 0 : P[PINDEX.breathbend] * (E - 1);
+      const cont = stepped ? Math.round(contour1 * 12) / 12 : contour1;
+      const common = e.bendOct + bend + cont + e.sizeOct;
+      const ref = LOG2_440 + P[PINDEX.detune] / 1200;
+      const base0 = stepped ? ref + Math.round((this.logF[0] - ref) * 12) / 12 : this.logF[0];
+      const base1 = stepped ? ref + Math.round((this.logF[1] - ref) * 12) / 12 : this.logF[1];
+      let lL = base0 + common;
       let lR;
       if (topo === 1) {                                                       // Single: the two folds, detuned around the note
         const as = Math.max(P[PINDEX.asym], P[PINDEX.chaos]), half = 0.5 * as * as * SINGLE_CENTS / 1200;   // squared: small values stay in tune; Chaos detunes too
         lR = lL + half; lL -= half;
       }
-      else if (mode === 1) lR = lL + P[PINDEX.interval] / 12;                 // Interval
-      else if (mode >= 2) lR = this.logF[1] + common;                         // Duo, Independent
+      else if (mode === 1) lR = lL + (lock ? Math.round(P[PINDEX.interval]) : P[PINDEX.interval]) / 12;   // Interval
+      else if (mode >= 2) lR = base1 + common;                                // Duo, Independent
       else lR = lL;                                                           // Handoff
       // side targets
       const w = this.w;
@@ -488,16 +571,16 @@
           else if (sides === 2) { w[0] = 0; w[1] = 1; }
           else if (sides === 3) { w[0] = this.sylSide === 0 ? 1 : 0; w[1] = 1 - w[0]; }
           else {
-            const f = Math.pow(2, lL), sp = P[PINDEX.split], ov = P[PINDEX.overlap];
+            const f = Math.pow(2, lL - e.sizeOct), sp = P[PINDEX.split], ov = P[PINDEX.overlap];   // Size moves Split with the bird
             const lo = Math.max(50, sp - ov / 2), hi = sp + ov / 2;
             const t = hi > lo ? clamp((f - lo) / (hi - lo), 0, 1) : (f >= sp ? 1 : 0);
             w[1] = t * t * (3 - 2 * t); w[0] = 1 - w[1];
           }
-          // Chaos opens the silent side too, 7.3 semitones away and unlocked (harsh calls are bilateral)
-          const ch = P[PINDEX.chaos];
+          // Chaos opens the silent side too, a non-harmonic interval away (harsh calls are bilateral); locked: 3 semitones
+          const ch = P[PINDEX.chaos], cst = (lock ? Math.round(CHAOS_ST) : CHAOS_ST) / 12;
           if (ch > 0) {
-            if (w[0] >= w[1]) { w[1] = Math.max(w[1], ch); lR = lL + CHAOS_ST / 12; }
-            else { w[0] = Math.max(w[0], ch); lL = lR - CHAOS_ST / 12; }
+            if (w[0] >= w[1]) { w[1] = Math.max(w[1], ch); lR = lL + cst; }
+            else { w[0] = Math.max(w[0], ch); lL = lR - cst; }
           }
         } else if (mode === 1) { w[0] = 1; w[1] = 1; }
         else { w[0] = this.sideHeld[0] ? 1 : 0; w[1] = this.sideHeld[1] ? 1 : 0; }
@@ -519,6 +602,7 @@
         any = true;
         const regJ = j === 1 && topo === 0 ? clamp(regBase + 0.25 * asym, 0, 1) : regBase;
         const o = this.setupLabial(j, j === 0 ? lL : lR, regJ, E, 0, S[j]);
+        if (lock) o.gamma *= Math.pow(2, this.corr[topo === 1 ? 0 : j]);     // the pitch keeper (Single: one for both folds)
         o.gain *= j === 0 ? lvl0 : lvl1;
         if (topo === 1) o.gain *= 0.6;                                        // two folds sum
         sub = Math.max(sub, Math.ceil(o.gamma * fmMax / (srOS * H_MAX)));
@@ -564,17 +648,17 @@
       const gc = 1 - Math.exp(-1 / (gateS * srOS));
       const grain = P[PINDEX.grain] * GRAIN_SD;
       const nc = 1 - Math.exp(-TWO_PI * GRAIN_HZ / srOS), nNorm = Math.sqrt((2 - nc) / nc);
-      const C = topo === 1 ? 0 : Math.min(1, P[PINDEX.coupling] + CHAOS_C * P[PINDEX.chaos]);
+      const C = topo === 1 ? 0 : Math.min(1, P[PINDEX.coupling] * (lock ? LOCK_COUPLING : 1) + CHAOS_C * P[PINDEX.chaos]);
       // Single: the two folds of one source are tied through their velocities (dissipative coupling), so they
       // move together until Asymmetry detunes them too far; in step, the pull vanishes
       const K = topo === 1 ? SINGLE_PULL * (0.3 + P[PINDEX.coupling]) : 0;
       const wobInc = wobRate / srOS;
       // internal trachea and Filter
-      const jumps = P[PINDEX.jumps], chaos = P[PINDEX.chaos], filterOn = P[PINDEX.filter] >= 0.5;
+      const jumps = P[PINDEX.jumps] * (lock ? LOCK_JUMPS : 1), chaos = P[PINDEX.chaos], filterOn = P[PINDEX.filter] >= 0.5;
       const rBase = TUBE_R0 + JUMP_R * jumps, rT = rBase + chaos * (0.95 - rBase);
       const kfb = JUMP_K * jumps * jumps + CHAOS_K * chaos;
       const tubeOn = filterOn || kfb > 0;
-      const Tnew = Math.max(2, 2 * P[PINDEX.trachea] / 100 / SOUND * srOS);
+      const Tnew = Math.max(2, 2 * P[PINDEX.trachea] * Math.pow(2, -e.sizeOct) / 100 / SOUND * srOS);   // Size scales the tube
       if (this.Tsm === 0) this.Tsm = Tnew;
       let cT = this.Tsm;
       const dT = (Tnew - cT) * inv;
@@ -595,6 +679,27 @@
       const w0 = w[0], w1 = w[1], w2 = w[2];
       let wph = this.wobPh;
       const tap = e.tap;                    // tests only: per-source normalized output at 4x
+      // pitch keeper: expected cycles of each source's commanded pitch (without the correction), and its crossings.
+      // Single measures the two folds together (they move as one source) against the centre pitch.
+      const single = topo === 1;
+      const k0 = lock && on0, k1 = lock && on1 && !single;
+      let kp0 = this.kph[0], kp1 = this.kph[1], kprev0 = this.kprev[0], kprev1 = this.kprev[1];
+      let karm0 = this.karm[0], karm1 = this.karm[1];
+      const hzT0 = single ? Math.pow(2, 0.5 * (lL + lR)) : S[0].hz, hzT1 = S[1].hz;
+      let kh0 = this.khz[0] || hzT0, kh1 = this.khz[1] || hzT1;
+      if (lock) {
+        if (Math.abs(Math.log2(hzT0 / kh0)) > KEEP_STEP) { this.kcount[0] = 0; this.khold[0] = KEEP_HOLD; }
+        if (Math.abs(Math.log2(hzT1 / kh1)) > KEEP_STEP) { this.kcount[1] = 0; this.khold[1] = KEEP_HOLD; }
+      }
+      const dkh0 = (hzT0 - kh0) * inv, dkh1 = (hzT1 - kh1) * inv;
+      const kg0 = Math.tan(Math.PI * Math.min(0.45 * srOS / OS, hzT0 * Math.pow(2, this.corr[0])) / srOS), kk = 1 / KEEP_Q;
+      const kg1 = Math.tan(Math.PI * Math.min(0.45 * srOS / OS, hzT1 * Math.pow(2, this.corr[1])) / srOS);
+      const ka10 = 1 / (1 + kg0 * (kg0 + kk)), ka20 = kg0 * ka10, ka30 = kg0 * ka20;
+      const ka11 = 1 / (1 + kg1 * (kg1 + kk)), ka21 = kg1 * ka11, ka31 = kg1 * ka21;
+      let kb0 = this.kb[0], kb1 = this.kb[1], kb2 = this.kb[2], kb3 = this.kb[3];
+      let ke0 = this.kenv[0], ke1 = this.kenv[1];
+      const kdec0 = 1 - 2 * hzT0 / srOS, kdec1 = 1 - 2 * hzT1 / srOS;     // the peak hold falls to 1/e in about half a period
+      if (!lock && (this.corr[0] !== 0 || this.corr[1] !== 0)) this.resetKeeper();
       for (let i = 0; i < nOS; i++) {
         gs0 += (w0 - gs0) * gc; gs1 += (w1 - gs1) * gc; gs2 += (w2 - gs2) * gc;
         gp += (pg[i] - gp) * gc;
@@ -626,7 +731,7 @@
           a0 = ca[0] + cd[0] * (1 - ge); b0 = cb[0];
           if (grain > 0) { n0 += nc * (this.gauss() - n0); const n = grain * nNorm * n0; b0 += n; a0 += this.slope[0] * n; }
           // coupling: the other sources' positions nudge this drive (shared pressure)
-          if (C > 0) a0 += C * (cd[0] + COUPLE_DC) * (gs1 * pn1 + (on2 ? gs2 * pn2 : 0));
+          if (C > 0) { const u = C * (gs1 * pn1 + (on2 ? gs2 * pn2 : 0)); a0 += (cd[0] + COUPLE_DC) * (u > COUPLE_MAX ? COUPLE_MAX : u < -COUPLE_MAX ? -COUPLE_MAX : u); }
           if (K > 0) a0 += K * (y1 - y0);
           if (fb !== 0) a0 += fb * (cd[0] + COUPLE_DC) * gs0;
           h0 = cg[0] * fm * invSr * invSub;
@@ -636,7 +741,7 @@
           const ge = Math.max(-0.5, 1 - 1.5 * ((1 - gs1) + breathOff * gs1));
           a1 = ca[1] + cd[1] * (1 - ge); b1 = cb[1];
           if (grain > 0) { n1 += nc * (this.gauss() - n1); const n = grain * nNorm * n1; b1 += n; a1 += this.slope[1] * n; }
-          if (C > 0) a1 += C * (cd[1] + COUPLE_DC) * gs0 * pn0;
+          if (C > 0) { const u = C * gs0 * pn0; a1 += (cd[1] + COUPLE_DC) * (u > COUPLE_MAX ? COUPLE_MAX : u < -COUPLE_MAX ? -COUPLE_MAX : u); }
           if (K > 0) a1 += K * (y0 - y1);
           if (fb !== 0) a1 += fb * (cd[1] + COUPLE_DC) * gs1;
           h1 = cg[1] * fm * invSr * invSub;
@@ -691,6 +796,29 @@
         let sum = 0;
         if (on0) { pn0 = (x0 - cmean[0]) / crms[0]; sum += pn0 * crms[0] * cgain[0] * gs0; }
         if (on1) { pn1 = (x1 - cmean[1]) / crms[1]; sum += pn1 * crms[1] * cgain[1] * gs1; }
+        if (k0) {
+          kh0 += dkh0; const inc = kh0 * fm * invSr; kp0 += inc;
+          const xin = single ? 0.5 * (pn0 + pn1) : pn0;
+          const v3 = xin - kb1, v1 = ka10 * kb0 + ka20 * v3, v2 = kb1 + ka20 * kb0 + ka30 * v3;
+          kb0 = 2 * v1 - kb0; kb1 = 2 * v2 - kb1;
+          const sg = kk * v1;
+          ke0 = Math.max(sg < 0 ? -sg : sg, ke0 * kdec0);
+          if (gs0 < 0.5) { karm0 = 0; this.kcount[0] = 0; }
+          else if (karm0) { if (sg >= 0) { this.keepCross(0, kp0 - inc * sg / (sg - kprev0)); karm0 = 0; } }
+          else if (sg < -KEEP_ARM * ke0) karm0 = 1;
+          kprev0 = sg;
+        }
+        if (k1) {
+          kh1 += dkh1; const inc = kh1 * fm * invSr; kp1 += inc;
+          const v3 = pn1 - kb3, v1 = ka11 * kb2 + ka21 * v3, v2 = kb3 + ka21 * kb2 + ka31 * v3;
+          kb2 = 2 * v1 - kb2; kb3 = 2 * v2 - kb3;
+          const sg = kk * v1;
+          ke1 = Math.max(sg < 0 ? -sg : sg, ke1 * kdec1);
+          if (gs1 < 0.5) { karm1 = 0; this.kcount[1] = 0; }
+          else if (karm1) { if (sg >= 0) { this.keepCross(1, kp1 - inc * sg / (sg - kprev1)); karm1 = 0; } }
+          else if (sg < -KEEP_ARM * ke1) karm1 = 1;
+          kprev1 = sg;
+        }
         if (on2) { pn2 = z / (2 * Math.sqrt(ca[2])); sum += pn2 * cgain[2] * gs2; }
         if (tubeOn) {
           // into the tube: the sources' normalized flow, plus the reflected wave
@@ -724,6 +852,15 @@
       this.prevN[0] = pn0; this.prevN[1] = pn1; this.prevN[2] = pn2;
       this.wobPh = wph;
       this.tw = tw & TUBE_MASK; this.tlp = tlp; this.ic1 = ic1; this.ic2 = ic2;
+      if (lock) {
+        this.kph[0] = kp0; this.kph[1] = kp1; this.kprev[0] = kprev0; this.kprev[1] = kprev1;
+        this.karm[0] = karm0; this.karm[1] = karm1;
+        this.kb[0] = kb0; this.kb[1] = kb1; this.kb[2] = kb2; this.kb[3] = kb3; this.kenv[0] = ke0; this.kenv[1] = ke1;
+        this.khz[0] = k0 ? hzT0 : 0; this.khz[1] = k1 ? hzT1 : 0;
+        if (k0) this.keepUpdate(0); else this.kcount[0] = 0;
+        if (k1) this.keepUpdate(1); else this.kcount[1] = 0;
+        if (single) this.corr[1] = this.corr[0];
+      }
       if (!(Math.abs(tlp) < 1e6 && Math.abs(ic1) < 1e6 && Math.abs(ic2) < 1e6)) { this.tube.fill(0); this.tlp = this.ic1 = this.ic2 = 0; }
       // what the bench and tests read
       const m = on0 ? S[0] : S[1];
@@ -746,7 +883,7 @@
       this.blkL = new Float32Array(BLOCK); this.blkR = new Float32Array(BLOCK); this.blkPos = BLOCK;
       this.ageCounter = 0; this.quietBlocks = 0;
       this.stack = [];
-      this.bendNorm = 0; this.bendOct = 0; this.tempo = 120;
+      this.bendNorm = 0; this.bendOct = 0; this.tempo = 120; this.sizeOct = 0;
       this.dc = { x: 0, y: 0, R: 1 - 2 * Math.PI * 10 / sampleRate };
       this.volSm = Math.pow(10, PARAMS[PINDEX.volume].def / 20);
       this.smooth = 1 - Math.exp(-BLOCK / (0.02 * sampleRate));
@@ -770,8 +907,14 @@
       const d = PARAMS[i];
       this.p[i] = clamp(d.step ? Math.round(v / d.step) * d.step : v, d.min, d.max);
       if (id === 'mode' || id === 'playmode' || id === 'topology') this.allNotesOff();
+      if (id === 'size' || id === 'lock') this.sizeOct = this.computeSizeOct();
     }
     getParam(id) { return this.p[PINDEX[id]]; }
+    // octaves Size moves the bird by (0 at the songbird default); whole octaves with Lock
+    computeSizeOct() {
+      const o = -(this.p[PINDEX.size] - 0.25) * SIZE_OCT;
+      return this.p[PINDEX.lock] >= 0.5 ? Math.round(o) : o;
+    }
     setBend(norm) { this.bendNorm = clamp(norm, -1, 1); }
     setTempo(bpm) { this.tempo = clamp(bpm, 20, 400); }
 
@@ -864,6 +1007,7 @@
         return;
       }
       this.bendOct = this.bendNorm * this.p[PINDEX.bendrange] / 12;
+      this.sizeOct = this.computeSizeOct();
       this.volSm += (Math.pow(10, this.p[PINDEX.volume] / 20) - this.volSm) * this.smooth;
       const nOS = BLOCK * OS, o = this.os;
       o.fill(0);
