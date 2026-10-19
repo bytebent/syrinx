@@ -96,7 +96,16 @@ Experiments:
   squared Asymmetry keeps the default within 2–18 cents; folds slip into roughness from about
   0.5 (tonal) to 0.7 (rich).
 - Cost: running sides one after the other doubled the worst case (22%); one interleaved loop
-  brought it to 13.5% (one side 10.7%).
+  brought it to 13.5% (one side 10.7%). New `tools/perf.js` rows:
+
+  | Scenario | CPU |
+  |---|---|
+  | 1 voice, two sides (Interval, Coupling 0.3) | 3.6% |
+  | 1 voice, two sides at the worst case | 13.5% |
+  | 1 voice, Triple | 2.9% |
+  | 1 voice, Single | 3.8% |
+  | 1 voice, pattern 18/s + Wobble | 4.1% |
+  | 4 voices, defaults | 9.8% |
 
 Tests (new):
 
