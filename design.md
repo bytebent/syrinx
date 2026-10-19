@@ -57,9 +57,29 @@ The output is x with its DC removed (the airflow the labia let through).
 - **Grain** adds noise to tension, which made Perl et al.'s synthetic song sound more natural.
 - **Breath bend** lets pressure bend pitch, after the great kiskadee, whose pitch follows air sac
   pressure rather than muscle. A direct pitch offset, an approximation.
-- **Integration:** semi-implicit Euler at 4× the host rate, with enough sub-steps to keep γ·dt at
-  or below Sitt et al. 2010's step (about 0.027). High notes need more sub-steps; batch 03
-  measures this. [Open: Euler or a second-order step]
+- **Integration:** RK4 at 4× the host rate, with enough sub-steps to keep each step at or below
+  0.1 model time units (pitch error under 0.03 cent, even on the sharpest pulses). [Decided in
+  batch 02; batch 03 measures the cost]
+
+**How the controls reach the model** (batch 02):
+
+- The onset line is exact: Hopf at α = 0 for β ≤ −0.25, otherwise the saddle-node of the fixed
+  points, where the rest state is destroyed (SNILC). Drive is measured past this line.
+- Regime r sets β = −0.4 + 0.8·r and the drive at default Pressure and full envelope:
+  0.15·(0.001/0.15)^r. Regime 0 is a tonal Hopf tone; Regime 1 sits just past the SNILC line,
+  rich and pulse-like.
+- Pressure scales the drive over 8 octaves (×2^(8·(p − 0.7))); the envelope scales it between
+  0.3 and 1. On the rich side more drive smooths the pulses; on the tonal side it adds level and a
+  little brightness. The envelope also sets the output level, since a SNILC tone starts at full
+  amplitude.
+- Link pulls Regime towards 1 below 1 kHz and towards 0 above 2.25 kHz (log scale between).
+- Band limit: spectral content is held at or below 15 kHz ÷ pitch by adding drive, so very high
+  rich notes stay below the oversampled Nyquist.
+- Grain moves tension along the onset line (so the drive stays put), band-limited to 1 kHz.
+- Levels are evened by RMS to the power 0.7, as in Throat.
+- The map (49 Regime rows × 97 drive columns, square-root spaced) is read with Catmull-Rom
+  interpolation; no stencil crosses the Hopf/SNILC corner, which sits exactly on a row. Map and
+  direct integration agree to 0.01 cent.
 
 ## 4. Sources and play modes
 

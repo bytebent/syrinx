@@ -9,8 +9,20 @@ Syrinx makes the sound. Its partner, [beak-tube](https://github.com/bytebent/bea
 separate effect that shapes any audio like a bird's trachea, throat and beak. They work alone or
 together, the way Throat and mouth-tube do.
 
-Status: **design**. Nothing is built yet. The reference engine and browser bench come first,
-then the C++ port and the JUCE plugin.
+Status: **prototype, batch 02 of 11**. The source core of the reference engine works: one
+oscillator per voice, in tune to 0.04 cent from pure tone to buzz, with Regime, Link, Grain,
+Breath bend, Pressure and the envelope. Sides, patterns, coupling and the bench come next; then
+the C++ port and the JUCE plugin.
+
+## Try it
+
+Needs Node 18 or newer. No packages to install.
+
+```sh
+node tests/engine-test.js        # engine tests
+node tools/render-presets.js     # test presets → renders/*.wav
+node tools/make-maps.js          # rebuild the map (about 2 minutes; only after changing the model)
+```
 
 ## Files
 
@@ -21,17 +33,17 @@ then the C++ port and the JUCE plugin.
 The design is shared with beak-tube in the doc *Syrinx and beak-tube: design and architecture*.
 `design.md` is this repo's copy of the Syrinx half.
 
-## Planned layout
+## Layout
 
 - `reference/syrinx-engine.js`: the reference engine; defines the sound
-- `reference/syrinx-maps.js`: generated map of pitch and spectral content over the model's
-  pressure–tension plane
-- `reference/presets.js`: test presets (bench and tests only)
-- `source/SyrinxDSP.h`: C++ port, real-time safe, no JUCE dependency
-- `source/PluginProcessor.*`, `source/PluginEditor.*`, `ui/index.html`: JUCE instrument and its
-  web-view interface
-- `tests/`: engine tests, C++ against reference comparison, plugin wrapper test
-- `tools/`: bench (`syrinx.html`), map generator, performance and preset renders
+- `reference/syrinx-maps.js`: generated map of frequency, spectral content and level over the
+  oscillator's control plane (by `tools/make-maps.js`)
+- `reference/presets.js`: test presets (renders and tests only)
+- `tests/engine-test.js`: engine tests
+- `tools/make-maps.js`, `tools/render-presets.js`: map generator, preset renders
+
+Later (see `plan.md`): `source/` (C++ port and JUCE instrument), `ui/`, `tools/bench/`
+(`syrinx.html`), `tools/perf.js`, `packaging/`, CI.
 
 ## License note
 
