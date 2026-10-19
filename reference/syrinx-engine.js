@@ -30,7 +30,7 @@
   const OS = 4;                 // internal oversampling
   const BLOCK = 32;             // fixed internal block (host samples) = latency
   const FIR_LEN = 128;          // decimation filter taps (at 4x rate)
-  const MAX_VOICES = 4;         // Poly voice count: settled in batch 03
+  const MAX_VOICES = 4;         // Poly voices (batch 03: worst case about 11% of a core per voice)
   const TWO_PI = 2 * Math.PI;
 
   /* ---------- the model and its map ---------- */
@@ -39,7 +39,7 @@
   const ROWS = 49, COLS = 97;              // map size (row 9 sits on the Hopf/SNILC corner, β = −0.25)
   const U0 = Math.sqrt(D_MIN / D_MAX);
   const H_MAX = 0.1;                       // largest RK4 step, in model time units
-  const MAX_SUB = 48;                      // sub-steps per oversampled sample, at most
+  const MAX_SUB = 48;                      // sub-steps per oversampled sample, at most (the band limit keeps it under 20)
   const D_HOPF = 0.15, D_SNILC = 1e-3;     // drive at default Pressure and full envelope, Regime 0 and 1
   const PRESS_OCT = 8;                     // Pressure 0–1 spans 8 octaves of drive (default 0.7)
   const NORM_POW = 0.7;                    // how much loudness is evened out across the map
@@ -279,16 +279,29 @@
       const nc = 1 - Math.exp(-TWO_PI * GRAIN_HZ / e.srOS), nNorm = Math.sqrt((2 - nc) / nc);
       let noise = this.noise;
       const s = this.s, invSub = 1 / sub, invSr = 1 / e.srOS;
+      let x = s[0], y = s[1];
       for (let i = 0; i < nOS; i++) {
         ca += da; cb += db; cg += dg; cgain += dgain; cmean += dmean;
         let bb = cb, aa = ca;
         if (grain > 0) { noise += nc * (this.gauss() - noise); const n = grain * nNorm * noise; bb += n; aa += onSlope * n; }
-        const h = cg * invSr * invSub;
-        for (let k = 0; k < sub; k++) rk4(aa, bb, s, h);
-        out[i] += (s[0] - cmean) * cgain;
+        const h = cg * invSr * invSub, hh = 0.5 * h, h6 = h / 6;
+        // RK4, written out (same arithmetic as rk4() above, in the same order)
+        for (let k = 0; k < sub; k++) {
+          const k1x = y, k1y = aa + bb * x + x * x - x * y - x * x * x - x * x * y;
+          const x2 = x + hh * k1x, y2 = y + hh * k1y;
+          const k2x = y2, k2y = aa + bb * x2 + x2 * x2 - x2 * y2 - x2 * x2 * x2 - x2 * x2 * y2;
+          const x3 = x + hh * k2x, y3 = y + hh * k2y;
+          const k3x = y3, k3y = aa + bb * x3 + x3 * x3 - x3 * y3 - x3 * x3 * x3 - x3 * x3 * y3;
+          const x4 = x + h * k3x, y4 = y + h * k3y;
+          const k4x = y4, k4y = aa + bb * x4 + x4 * x4 - x4 * y4 - x4 * x4 * x4 - x4 * x4 * y4;
+          x = x + h6 * (k1x + 2 * k2x + 2 * k3x + k4x);
+          y = y + h6 * (k1y + 2 * k2y + 2 * k3y + k4y);
+        }
+        out[i] += (x - cmean) * cgain;
       }
       // a runaway state (should never happen) is reset rather than allowed to blow up
-      if (!(Math.abs(s[0]) < 50 && Math.abs(s[1]) < 50)) { s[0] = 0; s[1] = 0.01; }
+      if (!(Math.abs(x) < 50 && Math.abs(y) < 50)) { x = 0; y = 0.01; }
+      s[0] = x; s[1] = y;
       this.noise = noise;
       this.a0 = a; this.b0 = b; this.g0 = gamma; this.gain0 = gain; this.mean0 = q.mean;
       this.fNow = hz; this.regimeNow = reg; this.driveNow = d; this.sciNow = q.sci; this.gammaNow = gamma; this.subNow = sub;

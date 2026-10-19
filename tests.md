@@ -3,7 +3,7 @@
 Quick results per batch: tests, experiments and pictures. Pictures live in `docs/tests/`. Run the
 tests with `node tests/engine-test.js`.
 
-**Now: 17 engine tests passing** (about 3 s).
+**Now: 17 engine tests passing** (about 3 s). Benchmark: `node tools/perf.js`.
 
 ## Batch 02 · source core
 
@@ -51,3 +51,29 @@ After widening Pressure (Buzz, Link, Pressure swell):
 ![pressure widened](docs/tests/02-pressure-widened.png)
 
 **You:** listen to the renders.
+
+## Batch 03 · cost
+
+- Worst case over notes, Regime and Pressure (Link off): 19 sub-steps per 4× sample, a rich
+  2.5 kHz note at Pressure 0. The 48-step cap is never reached (the band limit keeps it under 20).
+- Integrators at equal accuracy (0.05 cent): RK4 needs 3–10× fewer evaluations than RK2 or RK3;
+  semi-implicit Euler can't hold pitch at any practical step. Kept RK4.
+- RK4 step vs worst pitch error over the map: 0.1 → 0.10 cent, 0.125 → 0.26, 0.15 → 0.57,
+  0.2 → 1.9. Kept 0.1 (larger saves little).
+- `tools/perf.js` (one 2.1 GHz Xeon core, 48 kHz):
+
+  | Scenario | CPU |
+  |---|---|
+  | Silent | 0.1% |
+  | 1 voice, tonal | 1.4% |
+  | 1 voice, defaults | 2.1% |
+  | 1 voice, rich low | 3.0% |
+  | 1 voice, worst case | 10.8% |
+  | 4 voices, defaults | 6.3% |
+  | 4 voices, worst case | 40.0% |
+
+- The same worst-case loop in C++: 9.5% (no faster: each step waits on the last).
+- Interleaving independent oscillators in one loop: C++ 1, 2, 4, 8 sources = 9.9, 9.5, 11.1,
+  16.6%; JS = 11.4, 11.0, 17.8, 48.5%. Decided: all sources of a voice share one loop.
+- Inlining RK4 by hand in JS: about 5% faster (V8 already inlined it). Kept.
+- Decided: Poly has 4 voices.

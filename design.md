@@ -58,8 +58,9 @@ The output is x with its DC removed (the airflow the labia let through).
 - **Breath bend** lets pressure bend pitch, after the great kiskadee, whose pitch follows air sac
   pressure rather than muscle. A direct pitch offset, an approximation.
 - **Integration:** RK4 at 4× the host rate, with enough sub-steps to keep each step at or below
-  0.1 model time units (pitch error under 0.03 cent, even on the sharpest pulses). [Decided in
-  batch 02; batch 03 measures the cost]
+  0.1 model time units: n = ceil(γ / (4 × host rate × 0.1)), at most 48. Worst pitch error over
+  the whole map is 0.1 cent. RK4 needs 3–10 times fewer evaluations than RK2 or RK3 for the same
+  accuracy; semi-implicit Euler cannot hold pitch at any practical step. [Decided, batch 03]
 
 **How the controls reach the model** (batch 02):
 
@@ -259,7 +260,7 @@ source. Ranges may go somewhat past nature.
 | | `detune` | ±100 cents | 0 | |
 | | `glide` | 0–2 s | 20 ms | Mono only |
 | | `bendrange` | 2–48 st | 12 st | |
-| | `mode` | Mono, Poly | Mono | Poly voice count after batch 03 [Open] |
+| | `mode` | Mono, Poly | Mono | Poly: 4 voices [Decided, batch 03] |
 | | `size` | 0–1 | 0.25 | Wren to crane |
 | | `tempolock` | 0–100% | 50% | Keep or scale timing with Size |
 | Output | `filter` | Off, On | On | Internal trachea and tracking resonance |
@@ -279,6 +280,14 @@ Same rules as Throat and Dolphin:
   at any host buffer size.
 - The C++ port is checked sample by sample against the reference, built with `-ffp-contract=off`.
 - Idle voices and silent sources do no work.
+- **All sources of a voice are integrated together in one loop**, sharing the sub-step count
+  (the largest any of them needs), each with its own step. Coupling needs this anyway, and it is
+  nearly free: the loop is bound by latency, not arithmetic, so 2 interleaved sources cost what 1
+  does (JS and C++), 4 cost about 1.5×. The C++ port may interleave across voices too (8 sources:
+  1.0–1.7× one source). [Decided, batch 03]
+- **Cost** (batch 03, one 2.1 GHz Xeon core, 48 kHz): about 2% per voice at the defaults, 11% at
+  the worst case (a rich 2.5 kHz note at Pressure 0, Link off: 19 sub-steps). C++ is no faster
+  per source (9.5%), for the same latency reason.
 - The map file is generated once and committed; the engine never integrates a grid at load.
 
 Engine interface: `new SyrinxEngine(sr, seed)`, `setParam`, `noteOn` / `noteOff`, `setBend`,

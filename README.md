@@ -9,7 +9,7 @@ Syrinx makes the sound. Its partner, [beak-tube](https://github.com/bytebent/bea
 separate effect that shapes any audio like a bird's trachea, throat and beak. They work alone or
 together, the way Throat and mouth-tube do.
 
-Status: **prototype, batch 02 of 11**. The source core of the reference engine works: one
+Status: **prototype, batch 03 of 11**. The source core of the reference engine works: one
 oscillator per voice, in tune to 0.04 cent from pure tone to buzz, with Regime, Link, Grain,
 Breath bend, Pressure and the envelope. Sides, patterns, coupling and the bench come next; then
 the C++ port and the JUCE plugin.
@@ -22,7 +22,16 @@ Needs Node 18 or newer. No packages to install.
 node tests/engine-test.js        # engine tests
 node tools/render-presets.js     # test presets → renders/*.wav
 node tools/make-maps.js          # rebuild the map (about 2 minutes; only after changing the model)
+node tools/perf.js               # CPU per scenario
 ```
+
+## Performance
+
+`node tools/perf.js` prints how much of one CPU core each scenario needs at 48 kHz. On a 2.1 GHz
+Xeon core: about 2% per voice at the defaults, 11% for one voice at the worst case (a rich 2.5 kHz
+note at Pressure 0 with Link off), 40% for four such voices. The cost is set by the physics:
+rich notes need many small integration steps. C++ is no faster per source, but independent
+sources interleave almost for free, which batch 04 and the C++ port use.
 
 ## Files
 
@@ -41,10 +50,10 @@ The design is shared with beak-tube in the doc *Syrinx and beak-tube: design and
   oscillator's control plane (by `tools/make-maps.js`)
 - `reference/presets.js`: test presets (renders and tests only)
 - `tests/engine-test.js`: engine tests
-- `tools/make-maps.js`, `tools/render-presets.js`: map generator, preset renders
+- `tools/make-maps.js`, `tools/render-presets.js`, `tools/perf.js`: map generator, preset renders, benchmark
 
 Later (see `plan.md`): `source/` (C++ port and JUCE instrument), `ui/`, `tools/bench/`
-(`syrinx.html`), `tools/perf.js`, `packaging/`, CI.
+(`syrinx.html`), `packaging/`, CI.
 
 ## License note
 
