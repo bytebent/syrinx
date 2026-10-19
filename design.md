@@ -189,6 +189,23 @@ simulation produced a jump in frequency. The internal trachea is the same shared
 couples the sides: Trachea sets its length and Jumps the reflection (Laje & Mindlin's standard
 values: 2 cm and 0.9). It is the only place the tract acts back on the source.
 
+How it is built (batch 06):
+
+- The tube is a delay line per voice with round trip 2L/c (c = 350 m/s) and a wall-loss low-pass
+  at 10 kHz. Its far end reflects 0.5 + 0.45 × Jumps of the wave (up to 0.95 with Chaos).
+- What comes back drives the sources with strength 0.3 × Jumps² + 0.3 × Chaos. Squared because a
+  linear scale pulled the pitch hundreds of cents at mid settings: now Jumps 0.3 pulls about 10
+  cents, 0.6 bends the pitch smoothly by tens of cents, and near 1 the pitch jumps by up to an
+  octave and stays on its branch until the tube moves back past the other edge (hysteresis).
+- **Chaos** does three things at once: it lifts Regime (after Link) toward the rich side, opens the
+  silent side in Handoff 3.3 semitones away (a non-harmonic interval), and adds coupling and tube
+  feedback. One source with feedback stayed periodic in every test; two rich, coupled, detuned
+  sources break up. Limit: above about 2 kHz the band limit keeps the source near-pure, so Chaos
+  has little effect on high notes.
+- **Filter** sends what the tube transmits (instead of the raw source), then a band-pass that
+  tracks the note (Q 2.5, 70% mix). The level stays within about ±7 dB of Filter off, depending on
+  where the note falls against the tube's resonances; batch 11 can smooth this if it matters.
+
 ## 7. Musical lock
 
 With Lock on, every pitch lands on a semitone, so Syrinx plays with ordinary music while keeping

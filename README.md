@@ -9,9 +9,9 @@ Syrinx makes the sound. Its partner, [beak-tube](https://github.com/bytebent/bea
 separate effect that shapes any audio like a bird's trachea, throat and beak. They work alone or
 together, the way Throat and mouth-tube do.
 
-Status: **prototype, batch 05 of 11**. The reference engine has the sources (Duplex, Single,
-Triple), the play modes, coupling, breath gating, Wobble and the pattern engine, in tune to well
-under a cent. The internal trachea with Jumps and Chaos, the Filter, Lock and the bench come next;
+Status: **prototype, batch 06 of 11**. The reference engine has the sources (Duplex, Single,
+Triple), the play modes, coupling, breath gating, Wobble, the pattern engine, the internal trachea
+with Jumps and Chaos, and the Filter, in tune to well under a cent. Lock and the bench come next;
 then the C++ port and the JUCE plugin.
 
 ## Try it
@@ -28,8 +28,8 @@ node tools/perf.js               # CPU per scenario
 ## Performance
 
 `node tools/perf.js` prints how much of one CPU core each scenario needs at 48 kHz. On a 2.1 GHz
-Xeon core: about 2% per voice at the defaults, 11% for one voice at the worst case (a rich 2.5 kHz
-note at Pressure 0 with Link off), 40% for four such voices. Two sides cost about 1.3× one,
+Xeon core: about 3% per voice at the defaults, 13% for one voice at the worst case (a rich 2.5 kHz
+note at Pressure 0 with Link off), 44% for four such voices. Two sides cost about 1.2× one,
 because they run in one interleaved loop. The cost is set by the physics:
 rich notes need many small integration steps. C++ is no faster per source, but independent
 sources interleave almost for free, which batch 04 and the C++ port use.

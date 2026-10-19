@@ -103,6 +103,27 @@
       params: { pattern: 1, sylrate: 9, duty: 0.7, shape: 3, sweep: 0.4, sides: 3, asym: 0.6, jitter: 0.15, regime: 0, link: 0, transpose: 48 },
       phrase: [[60, 0, 1.6]],
     },
+    {
+      name: 'Jumps (tube sweep)',
+      about: 'Jumps 1: a 3.3 kHz tone while the internal trachea lengthens from 4 to 7 cm; the pitch jumps where the tube round trip meets the period (Arneodo & Mindlin 2009).',
+      params: { jumps: 1, trachea: 4, regime: 0, link: 0, filter: 0, attack: 0.02, release: 0.1 },
+      phrase: [[68, 0, 3.0]],
+      sweep: { id: 'trachea', from: 4, to: 7 },
+    },
+    {
+      name: 'Screech (Chaos)',
+      about: 'Chaos rising from 0 to 1 on a low note: the second side opens, feedback and coupling grow, and the tone breaks into a harsh, aperiodic call (cockatoo).',
+      params: { regime: 0.5, attack: 0.02, release: 0.1 },
+      phrase: [[36, 0, 3.0]],
+      sweep: { id: 'chaos', from: 0, to: 1 },
+    },
+    {
+      name: 'Filter off / on',
+      about: 'The same rich phrase twice: raw source, then through the internal trachea and the tracking resonance.',
+      params: { regime: 0.6, link: 0, transpose: 24, filter: 0, attack: 0.02, release: 0.08 },
+      phrase: [[60, 0, 0.5], [64, 0.55, 0.5], [67, 1.1, 0.7], [60, 2.0, 0.5], [64, 2.55, 0.5], [67, 3.1, 0.7]],
+      switchAt: { time: 1.9, id: 'filter', value: 1 },
+    },
   ];
   if (typeof module !== 'undefined' && module.exports) module.exports = { PRESETS };
   else root.SyrinxPresets = PRESETS;

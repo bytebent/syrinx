@@ -37,6 +37,7 @@ PRESETS.forEach((pr, idx) => {
   const t0 = Date.now();
   for (let i = 0; i < n; i += BL) {
     while (k < ev.length && ev[k][0] < i + BL) { if (ev[k][1] === 'on') e.noteOn(ev[k][2], 100); else e.noteOff(ev[k][2]); k++; }
+    if (pr.switchAt && i >= pr.switchAt.time * SR && i < pr.switchAt.time * SR + BL) e.setParam(pr.switchAt.id, pr.switchAt.value);
     if (pr.sweep) { const u = Math.min(1, i / (n - 0.6 * SR)); e.setParam(pr.sweep.id, pr.sweep.from + (pr.sweep.to - pr.sweep.from) * u); }
     const m = Math.min(BL, n - i);
     e.process(tl, tr, m);

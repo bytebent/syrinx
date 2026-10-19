@@ -139,3 +139,38 @@ New presets 08–16:
 ![presets 08–16](docs/tests/05-presets.png)
 
 **You:** listen to presets 08–16.
+
+## Batch 06 · internal trachea, Jumps, Chaos, Filter
+
+Experiments:
+
+- Tube feedback strength: linear in Jumps pulled the pitch 600+ cents at mid settings. Squared,
+  0.3 × Jumps²: 10 cents at 0.3, a smooth pull at 0.6, jumps near 1.
+- Chaos on one source with feedback stayed periodic. It needs two sources, the rich regime and a
+  non-harmonic interval (3.3 semitones). Works below about 2 kHz; above, the band limit keeps the
+  source pure.
+- Filter level against Filter off: −7.5 to +4.8 dB, depending on the note against the tube's
+  resonances.
+
+Benchmark after batch 06 (tube always running): 3.2% per voice at the defaults, 12.6% at the worst
+case, 14.5% two sides at the worst case, 44% four voices at the worst case.
+
+Tests (new):
+
+- Filter: purer spectrum (content 2.59 → 1.61), pitch unchanged, level −0.9 dB. ✓
+- Jumps 0, Filter off: tube length changes nothing. ✓
+- Jumps 0.3: pitch pull 10 cents. ✓
+- Jumps 1, trachea 4 → 7 → 4 cm on a 3.3 kHz note: a 1195-cent jump, with hysteresis. ✓
+- Chaos 1 on a 523 Hz note: periodicity 1.00 → 0.40. ✓
+- All new parameters at their extremes stay finite and bounded. ✓
+
+Trachea sweeps (smooth pull at Jumps 0.6; jumps with hysteresis at Jumps 1), Chaos off and on,
+Filter off and on:
+
+![trachea](docs/tests/06-trachea.png)
+
+New presets 17–19:
+
+![presets 17–19](docs/tests/06-presets.png)
+
+**You:** listen to presets 17–19.

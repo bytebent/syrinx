@@ -63,7 +63,7 @@ function spectralContent(x, sr, f0) {
   return num / den;
 }
 function steady(L, sr, from, to) { return L.subarray(Math.round(from * sr), Math.round(to * sr)); }
-const PLAIN = { grain: 0, link: 0, attack: 0.005, sustain: 1, decay: 0.05 };
+const PLAIN = { grain: 0, link: 0, attack: 0.005, sustain: 1, decay: 0.05, filter: 0 };   // the raw source
 
 // 1. the map: the Hopf side is born with a set frequency and little amplitude, the SNILC side with
 //    near-zero frequency, full amplitude and rich spectrum
@@ -128,7 +128,7 @@ const PLAIN = { grain: 0, link: 0, attack: 0.005, sustain: 1, decay: 0.05 };
   const rows = [];
   for (const hz of [500, 900, 1500, 2500, 4500]) {
     const note = 69 + 12 * Math.log2(hz / 440) - 36;
-    const { L } = render(48000, 0.6, e => { apply(e, { regime: 0.3, link: 1, grain: 0, sustain: 1, detune: 100 * (note - Math.round(note)) }); e.noteOn(Math.round(note), 100); });
+    const { L } = render(48000, 0.6, e => { apply(e, { regime: 0.3, link: 1, grain: 0, sustain: 1, filter: 0, detune: 100 * (note - Math.round(note)) }); e.noteOn(Math.round(note), 100); });
     rows.push([hz, spectralContent(steady(L, 48000, 0.3, 0.6), 48000, hz)]);
   }
   const falls = rows.every((r, i) => i === 0 || r[1] <= rows[i - 1][1] + 0.05);
@@ -339,7 +339,73 @@ const late = (t) => [Math.round(0.5 * OSR), t.n];
   check('Wobble (pitch): centre stays on the note', Math.abs(cents(got, want)) < 5, cents(got, want).toFixed(2) + ' cents');
 }
 
-check('38 parameters after batch 05', PARAMS.length === 38, PARAMS.length + '');
+/* ---------- batch 06: internal trachea, Jumps, Chaos, Filter ---------- */
+function periodicity(x, f0, from, to) {
+  const W = Math.round(0.04 * 48000), T = 48000 / f0, vals = [];
+  for (let a = from; a + 2 * W + Math.ceil(T * 4) <= to; a += W) {
+    let best = -1;
+    for (let lag = Math.max(2, Math.floor(T * 0.5)); lag <= Math.ceil(T * 4); lag++) {
+      let s = 0, p = 0, q = 0; for (let i = a; i < a + W; i++) { s += x[i] * x[i + lag]; p += x[i] * x[i]; q += x[i + lag] * x[i + lag]; }
+      const c = s / Math.sqrt(p * q + 1e-30); if (c > best) best = c;
+    }
+    vals.push(best);
+  }
+  vals.sort((p, q) => p - q); return vals[Math.floor(vals.length / 2)];
+}
+
+// 22. Filter: purer, same pitch, level within a few dB
+{
+  const want = midiHz(84);
+  const off = render(48000, 0.6, e => { apply(e, Object.assign({}, PLAIN, { regime: 0.6, transpose: 24 })); e.noteOn(60, 100); }).L;
+  const on = render(48000, 0.6, e => { apply(e, Object.assign({}, PLAIN, { regime: 0.6, transpose: 24, filter: 1 })); e.noteOn(60, 100); }).L;
+  const cOff = spectralContent(steady(off, 48000, 0.25, 0.6), 48000, want), cOn = spectralContent(steady(on, 48000, 0.25, 0.6), 48000, want);
+  const p = pitch(steady(on, 48000, 0.25, 0.6), 48000, want / 1.5, want * 1.5);
+  const db = 20 * Math.log10(rms(on, 12000, 28800) / rms(off, 12000, 28800));
+  check('Filter: purer, in tune, level close', cOn < cOff - 0.5 && Math.abs(cents(p, want)) < 1 && Math.abs(db) < 8,
+    'content ' + cOff.toFixed(2) + ' → ' + cOn.toFixed(2) + ', ' + cents(p, want).toFixed(2) + ' cents, ' + db.toFixed(1) + ' dB');
+}
+
+// 23. without Jumps and Filter the tube changes nothing; with Jumps, lengthening it near the period jumps, with hysteresis
+{
+  const a = render(48000, 0.3, e => { apply(e, Object.assign({}, PLAIN, { trachea: 3.5 })); e.noteOn(60, 100); }).L;
+  const b = render(48000, 0.3, e => { apply(e, Object.assign({}, PLAIN, { trachea: 7 })); e.noteOn(60, 100); }).L;
+  let same = true; for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) { same = false; break; }
+  check('Jumps 0, Filter off: tube length changes nothing', same);
+  const sweep = (jumps) => {
+    const secs = 6, N = secs * 48000, want = midiHz(104);   // 3.3 kHz: one period is 5.3 cm of round trip
+    const r = tapRun({ regime: 0, link: 0, jumps, filter: 0, trachea: 4, transpose: 36 }, secs, [[68]], (e, i) => { const u = i / N; e.setParam('trachea', u < 0.5 ? 4 + 6 * u : 7 - 6 * (u - 0.5)); });
+    const W = Math.round(0.02 * OSR), rows = [];
+    for (let s0 = Math.round(0.1 * OSR); s0 + W <= r.tap.n; s0 += W) { const t = (s0 + W / 2) / OSR, u = t / secs; rows.push([t, u < 0.5 ? 4 + 6 * u : 7 - 6 * (u - 0.5), 1200 * Math.log2(zfreq(r.tap.s0, OSR, s0, s0 + W) / want)]); }
+    let step = 0; for (let i = 1; i < rows.length; i++) step = Math.max(step, Math.abs(rows[i][2] - rows[i - 1][2]));
+    const up = rows.filter(q => q[0] < secs / 2), dn = rows.filter(q => q[0] > secs / 2);
+    let hyst = 0; for (const q of up) { const d = dn.reduce((p, z) => Math.abs(z[1] - q[1]) < Math.abs(p[1] - q[1]) ? z : p); hyst = Math.max(hyst, Math.abs(q[2] - d[2])); }
+    return [step, hyst, Math.max(...rows.map(q => Math.abs(q[2])))];
+  };
+  const [s3, h3, p3] = sweep(0.3), [s1, h1] = sweep(1);
+  check('Jumps 0.3: a gentle pull, no jumps', p3 < 60 && s3 < 20, 'pull up to ' + p3.toFixed(0) + ' cents, largest step ' + s3.toFixed(0));
+  check('Jumps 1: frequency jumps with hysteresis (Arneodo & Mindlin)', s1 > 300 && h1 > 300, 'largest step ' + s1.toFixed(0) + ' cents, up/down differ by ' + h1.toFixed(0));
+}
+
+// 24. Chaos: a periodic note turns aperiodic
+{
+  // defaults at 523 Hz: Chaos works best below about 2 kHz (higher notes are held pure by the band limit)
+  const f0 = midiHz(72);
+  const pr = (c) => periodicity(render(48000, 1, e => { apply(e, { grain: 0, sustain: 1, filter: 0, chaos: c }); e.noteOn(36, 100); }).L, f0, 12000, 48000);
+  const p0 = pr(0), p1 = pr(1);
+  check('Chaos: periodic → aperiodic', p0 > 0.95 && p1 < 0.6, 'periodicity ' + p0.toFixed(2) + ' → ' + p1.toFixed(2));
+}
+
+// 25. extremes stay finite
+{
+  let ok = true, worst = 0;
+  for (const topology of [0, 1, 2]) for (const trachea of [1, 200]) {
+    const { L } = render(48000, 0.5, e => { apply(e, { topology, trachea, chaos: 1, jumps: 1, coupling: 1, grain: 1, wobblerate: 250, wobble: 1, pattern: 1, sylrate: 60, regime: 1 }); e.noteOn(36, 127); e.noteOn(84, 127); });
+    for (const v of L) { if (!Number.isFinite(v)) ok = false; worst = Math.max(worst, Math.abs(v)); }
+  }
+  check('Extremes: no NaN, output within ±1', ok && worst <= 1, 'peak ' + worst.toFixed(3));
+}
+
+check('42 parameters after batch 06', PARAMS.length === 42, PARAMS.length + '');
 
 console.log(failed ? failed + ' failed' : 'all passed');
 process.exit(failed ? 1 : 0);

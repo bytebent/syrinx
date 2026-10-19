@@ -174,6 +174,10 @@
     { id: 'asym', def: 0.2, min: 0, max: 1 },                // how much the sides (or folds) differ
     { id: 'balance', def: 0, min: -1, max: 1 },              // left–right level
     { id: 'coupling', def: 0.1, min: 0, max: 1 },            // pull between sources through the shared tube
+    // nonlinear
+    { id: 'jumps', def: 0, min: 0, max: 1 },                 // reflection fed back from the internal trachea
+    { id: 'trachea', def: 3.5, min: 1, max: 200, log: true },// cm, internal tube length
+    { id: 'chaos', def: 0, min: 0, max: 1 },                 // strong coupling plus feedback
     // muscles
     { id: 'wobblerate', def: 0, min: 0, max: 250 },          // Hz
     { id: 'wobble', def: 0, min: 0, max: 1 },
@@ -201,6 +205,7 @@
     { id: 'glide', def: 0.02, min: 0, max: 2, curve: 3 },    // s, mono only
     { id: 'bendrange', def: 12, min: 2, max: 48, step: 1 },
     { id: 'mode', def: 0, min: 0, max: 1, step: 1 },         // 0 mono, 1 poly (4 voices)
+    { id: 'filter', def: 1, min: 0, max: 1, step: 1 },       // internal trachea and tracking resonance on the output
     { id: 'volume', def: -6, min: -48, max: 6 },             // dB
   ];
   const PINDEX = {};
@@ -211,6 +216,24 @@
   const MEM_LEVEL = 0.6;                   // membrane output against the labia
   const WOBBLE_CENTS = 200;                // pitch depth of Wobble at full
   const GATE_MS = 1.5;                     // side and syllable gate time, at most
+  // the internal trachea (Laje & Mindlin 2005; Arneodo & Mindlin 2009): a tube closed at the syrinx
+  // and open at the far end. The sources push pressure in; the far end reflects part of it back,
+  // which reaches the sources' drive (Jumps) and, with Filter on, what comes out of the far end is
+  // the sound, through a light resonance that follows the pitch.
+  const SOUND = 350;                       // m/s
+  const TUBE_N = 16384, TUBE_MASK = TUBE_N - 1;   // 2 m of tube at 4 x 192 kHz
+  const TUBE_R0 = 0.5, JUMP_R = 0.45;      // reflection at the far end: 0.5, up to 0.95 with Jumps
+  const JUMP_K = 0.3;                      // feedback into the drive at Jumps 1 (follows Jumps squared:
+                                           // a subtle pull up to about 0.3, jumps with hysteresis from about 0.5)
+  // Chaos (batch 06 experiments): chaos appears with rich sources, moderate feedback and two
+  // sources a wide, non-harmonic interval apart; tonal sources and locked pairs stay periodic
+  const CHAOS_K = 0.3;                     // extra tube feedback at Chaos 1
+  const CHAOS_REG = 0.6;                   // Chaos pulls Regime up to at least this
+  const CHAOS_ST = 3.3;                    // Chaos in Handoff: the other side opens this far above (or below)
+  const CHAOS_C = 0.3;                     // extra coupling at Chaos 1
+  const TUBE_LOSS_HZ = 10000;              // wall loss: one-pole low-pass on the returning wave
+  const FILTER_Q = 2.5, FILTER_MIX = 0.7;  // tracking resonance on the pitch
+  const FILTER_GAIN = 2.8;                 // level match, Filter on against off (average over notes and Regime)
   const SINGLE_PULL = 0.05;                 // Single: fold pull at Coupling 0 is 0.3 × this
   const SINGLE_CENTS = 300;                // Single: fold detuning at full Asymmetry (they stop locking past about 1 semitone)
 
@@ -276,6 +299,7 @@
       this.logF = new Float64Array(2); this.glideLeft = new Int32Array(2); this.glideStep = new Float64Array(2);
       this.sideNote = new Int32Array(2); this.sideHeld = new Uint8Array(2);
       this.patGate = new Float32Array(BLOCK * OS);
+      this.tube = new Float64Array(TUBE_N);
       this.fNow = new Float64Array(3); this.subNow = 0; this.regimeNow = 0; this.driveNow = 0; this.sciNow = 1; this.gammaNow = 0;
       this.reset();
     }
@@ -291,6 +315,7 @@
       // pattern state
       this.pPhase = 0; this.sylRate = 8; this.sylPitch = 0; this.sylSweep = 0; this.sylSide = 1; this.sylCount = 0;
       this.contour0 = 0;
+      this.tube.fill(0); this.tw = 0; this.tlp = 0; this.Tsm = 0; this.ic1 = 0; this.ic2 = 0;
     }
     rand() {
       let x = this.rng;
@@ -326,6 +351,7 @@
         for (let j = 0; j < 3; j++) { this.x[j] = 0; this.y[j] = 0.01; this.gs[j] = 0; this.noise[j] = 0; this.prevN[j] = 0; }
         this.x[2] = 0.1; this.y[2] = 0;
         this.gp = 0; this.pPhase = 0; this.wobPh = 0;
+        this.tube.fill(0); this.tw = 0; this.tlp = 0; this.Tsm = 0; this.ic1 = 0; this.ic2 = 0;
         this.newSyllable(true);
       }
       this.stage = 1; this.held = true; this.age = ++this.e.ageCounter;
@@ -399,7 +425,8 @@
       const e = this.e, P = e.p;
       const hz = Math.pow(2, logHz);
       const rNote = clamp((Math.log2(LINK_HI) - logHz) / (Math.log2(LINK_HI) - Math.log2(LINK_LO)), 0, 1);
-      const reg = clamp(regBase + P[PINDEX.link] * (rNote - regBase), 0, 1);
+      let reg = clamp(regBase + P[PINDEX.link] * (rNote - regBase), 0, 1);
+      reg += P[PINDEX.chaos] * Math.max(0, CHAOS_REG - reg);                 // Chaos wants a rich source, after Link
       const dPath = D_HOPF * Math.pow(D_SNILC / D_HOPF, reg);
       let d = clamp(dPath * Math.pow(2, PRESS_OCT * (P[PINDEX.pressure] - 0.7)) * (0.3 + 0.7 * E), D_MIN, D_MAX);
       d = driveForContent(reg, d, Math.max(1.02, CONTENT_HZ / hz));
@@ -443,7 +470,7 @@
       let lL = this.logF[0] + common;
       let lR;
       if (topo === 1) {                                                       // Single: the two folds, detuned around the note
-        const as = P[PINDEX.asym], half = 0.5 * as * as * SINGLE_CENTS / 1200;   // squared: small values stay in tune
+        const as = Math.max(P[PINDEX.asym], P[PINDEX.chaos]), half = 0.5 * as * as * SINGLE_CENTS / 1200;   // squared: small values stay in tune; Chaos detunes too
         lR = lL + half; lL -= half;
       }
       else if (mode === 1) lR = lL + P[PINDEX.interval] / 12;                 // Interval
@@ -465,6 +492,12 @@
             const lo = Math.max(50, sp - ov / 2), hi = sp + ov / 2;
             const t = hi > lo ? clamp((f - lo) / (hi - lo), 0, 1) : (f >= sp ? 1 : 0);
             w[1] = t * t * (3 - 2 * t); w[0] = 1 - w[1];
+          }
+          // Chaos opens the silent side too, 7.3 semitones away and unlocked (harsh calls are bilateral)
+          const ch = P[PINDEX.chaos];
+          if (ch > 0) {
+            if (w[0] >= w[1]) { w[1] = Math.max(w[1], ch); lR = lL + CHAOS_ST / 12; }
+            else { w[0] = Math.max(w[0], ch); lL = lR - CHAOS_ST / 12; }
           }
         } else if (mode === 1) { w[0] = 1; w[1] = 1; }
         else { w[0] = this.sideHeld[0] ? 1 : 0; w[1] = this.sideHeld[1] ? 1 : 0; }
@@ -531,11 +564,27 @@
       const gc = 1 - Math.exp(-1 / (gateS * srOS));
       const grain = P[PINDEX.grain] * GRAIN_SD;
       const nc = 1 - Math.exp(-TWO_PI * GRAIN_HZ / srOS), nNorm = Math.sqrt((2 - nc) / nc);
-      const C = topo === 1 ? 0 : P[PINDEX.coupling];
+      const C = topo === 1 ? 0 : Math.min(1, P[PINDEX.coupling] + CHAOS_C * P[PINDEX.chaos]);
       // Single: the two folds of one source are tied through their velocities (dissipative coupling), so they
       // move together until Asymmetry detunes them too far; in step, the pull vanishes
       const K = topo === 1 ? SINGLE_PULL * (0.3 + P[PINDEX.coupling]) : 0;
       const wobInc = wobRate / srOS;
+      // internal trachea and Filter
+      const jumps = P[PINDEX.jumps], chaos = P[PINDEX.chaos], filterOn = P[PINDEX.filter] >= 0.5;
+      const rBase = TUBE_R0 + JUMP_R * jumps, rT = rBase + chaos * (0.95 - rBase);
+      const kfb = JUMP_K * jumps * jumps + CHAOS_K * chaos;
+      const tubeOn = filterOn || kfb > 0;
+      const Tnew = Math.max(2, 2 * P[PINDEX.trachea] / 100 / SOUND * srOS);
+      if (this.Tsm === 0) this.Tsm = Tnew;
+      let cT = this.Tsm;
+      const dT = (Tnew - cT) * inv;
+      this.Tsm = Tnew;
+      const aLoss = 1 - Math.exp(-TWO_PI * TUBE_LOSS_HZ / srOS);
+      const fTrack = Math.min(0.45 * e.sr, on0Hz(this, S));
+      const fg = Math.tan(Math.PI * fTrack / srOS), fk = 1 / FILTER_Q;
+      const fa1 = 1 / (1 + fg * (fg + fk)), fa2 = fg * fa1, fa3 = fg * fa2;
+      const tube = this.tube;
+      let tw = this.tw, tlp = this.tlp, ic1 = this.ic1, ic2 = this.ic2;
       const amDepth = wob * (1 - wfm), fmDepth = wob * wfm * WOBBLE_CENTS / 1200 * Math.LN2;
       const invSub = 1 / sub, invSr = 1 / srOS;
       const on0 = this.on[0], on1 = this.on[1], on2 = this.on[2];
@@ -560,6 +609,16 @@
         // drive factor: a closed side stops; between slow syllables the drive dips (minibreath).
         // Every coupling term uses the previous sample's values, so no source sees another's new state.
         const breathOff = mb * (1 - gp);
+        // the wave returning from the far end of the tube, delayed by the round trip
+        let refl = 0;
+        if (tubeOn) {
+          cT += dT;
+          const rp = tw - cT, i0 = Math.floor(rp), fr = rp - i0;
+          const pd = tube[i0 & TUBE_MASK] * (1 - fr) + tube[(i0 + 1) & TUBE_MASK] * fr;
+          tlp += aLoss * (pd - tlp);
+          refl = -rT * tlp;
+        }
+        const fb = kfb * refl;
         let a0 = 0, b0 = 0, a1 = 0, b1 = 0, muE = 0, h0 = 0, h1 = 0, h2 = 0;
         if (on0) {
           ca[0] += da[0]; cb[0] += db[0]; cg[0] += dg[0]; cgain[0] += dgain[0]; cmean[0] += dmean[0]; crms[0] += drms[0]; cd[0] += dd[0];
@@ -569,6 +628,7 @@
           // coupling: the other sources' positions nudge this drive (shared pressure)
           if (C > 0) a0 += C * (cd[0] + COUPLE_DC) * (gs1 * pn1 + (on2 ? gs2 * pn2 : 0));
           if (K > 0) a0 += K * (y1 - y0);
+          if (fb !== 0) a0 += fb * (cd[0] + COUPLE_DC) * gs0;
           h0 = cg[0] * fm * invSr * invSub;
         }
         if (on1) {
@@ -578,6 +638,7 @@
           if (grain > 0) { n1 += nc * (this.gauss() - n1); const n = grain * nNorm * n1; b1 += n; a1 += this.slope[1] * n; }
           if (C > 0) a1 += C * (cd[1] + COUPLE_DC) * gs0 * pn0;
           if (K > 0) a1 += K * (y0 - y1);
+          if (fb !== 0) a1 += fb * (cd[1] + COUPLE_DC) * gs1;
           h1 = cg[1] * fm * invSr * invSub;
         }
         if (on2) {
@@ -631,6 +692,25 @@
         if (on0) { pn0 = (x0 - cmean[0]) / crms[0]; sum += pn0 * crms[0] * cgain[0] * gs0; }
         if (on1) { pn1 = (x1 - cmean[1]) / crms[1]; sum += pn1 * crms[1] * cgain[1] * gs1; }
         if (on2) { pn2 = z / (2 * Math.sqrt(ca[2])); sum += pn2 * cgain[2] * gs2; }
+        if (tubeOn) {
+          // into the tube: the sources' normalized flow, plus the reflected wave
+          const w0n = on0 ? gs0 : 0, w1n = on1 ? gs1 : 0, w2n = on2 ? MEM_LEVEL * gs2 : 0;
+          const sn = w0n * pn0 + w1n * pn1 + w2n * pn2;
+          tube[tw & TUBE_MASK] = sn + refl;
+          if (filterOn) {
+            // out of the far end (transmitted, half a round trip later), at the sources' level
+            const rp = tw - 0.5 * cT, j0 = Math.floor(rp), fr = rp - j0;
+            const tr = (1 - rT) * (tube[j0 & TUBE_MASK] * (1 - fr) + tube[(j0 + 1) & TUBE_MASK] * fr);
+            const wsum = w0n + w1n + w2n;
+            const scale = wsum > 1e-9 ? ((on0 ? crms[0] * cgain[0] * w0n : 0) + (on1 ? crms[1] * cgain[1] * w1n : 0) + (on2 ? cgain[2] * w2n / MEM_LEVEL * MEM_LEVEL : 0)) / wsum : 0;
+            const v = tr * scale * FILTER_GAIN;
+            // tracking resonance (state-variable band-pass, unity peak) mixed with the tube
+            const v3 = v - ic2, v1 = fa1 * ic1 + fa2 * v3, v2 = ic2 + fa2 * ic1 + fa3 * v3;
+            ic1 = 2 * v1 - ic1; ic2 = 2 * v2 - ic2;
+            sum = (1 - FILTER_MIX) * v + FILTER_MIX * fk * v1;
+          }
+          tw++;
+        }
         out[i] += sum * gp * am;
         if (tap !== null && tap.n < tap.len) { tap.s0[tap.n] = on0 ? pn0 * gs0 : 0; tap.s1[tap.n] = on1 ? pn1 * gs1 : 0; tap.s2[tap.n] = on2 ? pn2 * gs2 : 0; tap.n++; }
       }
@@ -643,11 +723,15 @@
       this.noise[0] = n0; this.noise[1] = n1;
       this.prevN[0] = pn0; this.prevN[1] = pn1; this.prevN[2] = pn2;
       this.wobPh = wph;
+      this.tw = tw & TUBE_MASK; this.tlp = tlp; this.ic1 = ic1; this.ic2 = ic2;
+      if (!(Math.abs(tlp) < 1e6 && Math.abs(ic1) < 1e6 && Math.abs(ic2) < 1e6)) { this.tube.fill(0); this.tlp = this.ic1 = this.ic2 = 0; }
       // what the bench and tests read
       const m = on0 ? S[0] : S[1];
       this.subNow = sub; this.regimeNow = m.reg; this.driveNow = m.d; this.sciNow = m.sci; this.gammaNow = m.gamma;
     }
   }
+
+  function on0Hz(v, S) { return v.on[0] ? S[0].hz : v.on[1] ? S[1].hz : S[2].hz || 1000; }
 
   /* ---------- the engine ---------- */
   class SyrinxEngine {
