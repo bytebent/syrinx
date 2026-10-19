@@ -219,3 +219,14 @@ New presets 20–23:
 ![presets 20–23](docs/tests/07-presets.png)
 
 **You:** listen to presets 20–23.
+
+## Batch 08 · bench
+
+`tools/syrinx.html`, built from the reference engine, its map and the presets. Checked in headless
+Chromium: it powers on, a held key plays (left source 2.09 kHz, C6), the DSP meter reads, a test
+preset plays with Lock on and the keeper readout shows, no console errors, no sideways scroll at
+390 px.
+
+![bench](docs/tests/08-bench.png)
+
+**You:** listening round on the bench; decide the LFOs.

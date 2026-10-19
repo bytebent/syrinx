@@ -253,7 +253,7 @@ How it is built (batch 07):
   without Lock). The push from the other sources now never swings the drive by more than 80% of
   itself; nothing else changes below Coupling 0.4.
 
-[Open] Whether Lock defaults to On.
+Lock defaults to Off. [Decided]
 
 ## 8. Size
 
@@ -325,7 +325,7 @@ source. Ranges may go somewhat past nature.
 | | `tempolock` | 0–100% | 50% | Keep or scale timing with Size |
 | Output | `filter` | Off, On | On | Internal trachea and tracking resonance |
 | | `volume` | −48 to +6 dB | −6 dB | |
-| Lock | `lock` | Off, On | Off | Snaps every pitch to semitones |
+| Lock | `lock` | Off, On | Off [Decided] | Snaps every pitch to semitones |
 | | `glidestyle` | Smooth, Stepped | Smooth | How a locked sweep travels |
 
 ## 10. Code architecture

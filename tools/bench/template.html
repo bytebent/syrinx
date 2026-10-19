@@ -1,0 +1,705 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Syrinx</title>
+<style>
+:root{
+  --platinum:#dcdce0; --platinum-hi:#ececef; --etch:#9c9ca4; --ink:#000; --ink-soft:#4a4a52; --inset:#f4f4f6; --desk:#b9b9c0;
+  --blue:#4fae36; --blue-dk:#2f7a1f; --blue-lt:#a9e08f; --blue-deep:#1f5a14; --graphite:#6e6e78; --screen:#0b0b0e; --lcd:#a9e08f;
+  --ui:"Lucida Grande","Lucida Sans Unicode",Geneva,Verdana,sans-serif; --mono:Monaco,"Courier New",monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:radial-gradient(circle at 1px 1px, rgba(0,0,0,.09) 1px, transparent 1.5px) 0 0/6px 6px, var(--desk);
+  font:13px/1.45 var(--ui); color:var(--ink); padding:24px 16px 40px; -webkit-user-select:none; user-select:none}
+.window{max-width:1060px;margin:0 auto;
+  background:repeating-linear-gradient(0deg, rgba(255,255,255,.55) 0 1px, rgba(255,255,255,0) 1px 2px, rgba(0,0,0,.035) 2px 3px, rgba(0,0,0,0) 3px 4px), var(--platinum);
+  border:1px solid #7d7d86;border-radius:9px;box-shadow:0 1px 0 #fff inset, 0 12px 32px rgba(0,0,0,.22);overflow:hidden}
+.titlebar{display:flex;align-items:center;gap:12px;padding:9px 14px 8px;background:linear-gradient(#f6f6f8,#d6d6db);border-bottom:1px solid #8e8e96}
+.mark{width:22px;height:18px;border-radius:3px;background:var(--graphite);box-shadow:0 0 0 1px rgba(0,0,0,.35);position:relative;flex:none;overflow:hidden}
+.mark::after{content:"";position:absolute;left:0;right:0;top:7px;height:4px;background:var(--blue)}
+.titlebar h1{margin:0;font-size:15px;font-weight:700;letter-spacing:-.2px}
+.titlebar .sub{color:var(--ink-soft);font-size:11px}
+.titlebar .sub .ver{margin-left:6px;color:#7a7a84}
+.titlebar .tag{margin-left:auto;color:var(--ink-soft);font-size:11px}
+.body{padding:14px 18px 16px}
+
+/* screen */
+.screen{background:var(--screen);border-radius:6px;padding:10px;box-shadow:0 0 0 1px #000,0 2px 6px rgba(0,0,0,.5) inset;position:relative}
+.view{position:relative}
+.view canvas{display:block;width:100%;height:180px;border-radius:3px;background:#060608}
+.view canvas.axis{position:absolute;inset:0;background:transparent;pointer-events:none}
+.view .lbl{position:absolute;left:8px;top:6px;font:10px/1 var(--mono);color:var(--lcd);opacity:.85;letter-spacing:1px;pointer-events:none}
+.readouts{display:flex;flex-wrap:wrap;gap:4px 18px;font:11px/1 var(--mono);color:var(--lcd);margin-top:8px;letter-spacing:1px}
+.readouts b{font-weight:400;opacity:.6;margin-right:6px}
+.readouts .hot{color:#fff}
+.readouts .warn{color:#fff;background:var(--blue-dk);padding:1px 4px;border-radius:2px;margin:-1px -4px}
+.power{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;background:rgba(11,11,14,.86);border-radius:6px;z-index:2;color:var(--lcd);font:11px var(--mono);letter-spacing:1px}
+.power.hide{display:none}
+
+/* controls */
+.rows{display:flex;flex-wrap:wrap;gap:12px;margin-top:14px}
+fieldset{flex:1 1 auto;margin:0;border:1px solid var(--etch);border-radius:6px;padding:8px 12px 10px;background:rgba(236,236,239,.7);box-shadow:0 1px 0 #fff, inset 0 1px 0 #fff;min-width:0}
+legend{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:1.2px;padding:0 6px;display:flex;align-items:center;gap:6px}
+legend .dot{width:8px;height:8px;border-radius:50%;background:var(--blue);box-shadow:0 0 0 1px rgba(0,0,0,.35) inset}
+.knobs{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:flex-end;justify-content:space-around}
+.knob{display:flex;flex-direction:column;align-items:center;gap:3px;font-size:11px;width:64px}
+.knob.big{width:92px}
+.dial{--a0:0deg;--a1:0deg;--c:var(--blue);position:relative;width:44px;height:44px;border-radius:50%;cursor:ns-resize;touch-action:none;outline:none;
+  background:conic-gradient(from 225deg, #b9b9c0 0 var(--a0), var(--c) var(--a0) var(--a1), #b9b9c0 var(--a1) 270deg, transparent 270deg)}
+.knob.big .dial{width:70px;height:70px}
+.dial::before{content:"";position:absolute;inset:4px;border-radius:50%;background:var(--platinum-hi)}
+.dial .cap{position:absolute;inset:6px;border-radius:50%;
+  background:radial-gradient(circle at 50% 22%, rgba(255,255,255,.95) 0 18%, rgba(255,255,255,0) 46%), radial-gradient(circle at 50% 80%, #f7f7fa, #c8c8ce 60%, #9a9aa3);
+  box-shadow:0 2px 3px rgba(0,0,0,.35), 0 0 0 1px #7d7d86}
+.knob.big .dial .cap{inset:8px}
+.dial .ptr{position:absolute;inset:6px;border-radius:50%;pointer-events:none}
+.knob.big .dial .ptr{inset:8px}
+.dial .ptr::after{content:"";position:absolute;left:50%;top:3px;width:3px;height:30%;margin-left:-1.5px;border-radius:2px;background:#1a1a1e}
+.dial .mark30{position:absolute;inset:0;border-radius:50%;pointer-events:none}
+.dial .mark30::after{content:"";position:absolute;left:50%;top:-3px;width:2px;height:7px;margin-left:-1px;background:var(--blue-deep);border-radius:1px}
+.dial:focus-visible{box-shadow:0 0 0 2px var(--blue)}
+.knob .name{font-weight:700;white-space:nowrap}
+.val{font:700 10.5px var(--ui);background:var(--inset);box-shadow:inset 0 1px 2px rgba(0,0,0,.25);border-radius:3px;padding:1px 6px;min-width:56px;text-align:center;white-space:nowrap}
+
+.seg{display:inline-flex;flex-wrap:wrap;justify-content:center;border:1px solid #7d7d86;border-radius:12px;overflow:hidden;box-shadow:0 1px 2px rgba(0,0,0,.2)}
+.seg button{font:700 11px var(--ui);border:0;padding:4px 10px;cursor:pointer;color:#222;background:linear-gradient(#fff,#d8d8dd 48%,#c4c4ca 52%,#e6e6ea)}
+.seg button+button{border-left:1px solid #9c9ca4}
+.seg button[aria-pressed="true"]{color:#fff;text-shadow:0 -1px 0 rgba(0,0,0,.3);background:linear-gradient(var(--blue-lt),var(--blue) 48%,#3e9a28 52%,#6cc653)}
+.seg button:focus-visible{outline:2px solid var(--blue);outline-offset:-2px}
+.segwrap{display:flex;flex-direction:column;align-items:center;gap:5px;font-size:11px;font-weight:700;padding-bottom:4px}
+.chips{display:flex;gap:3px;margin-top:2px}
+.chips button{font:700 9.5px var(--ui);border:1px solid #7d7d86;border-radius:8px;padding:1px 5px;cursor:pointer;background:linear-gradient(#fff,#d8d8dd);color:#222}
+.chips button:hover{background:linear-gradient(var(--blue-lt),var(--blue));color:#fff;border-color:var(--blue-dk)}
+.curve{display:flex;flex-direction:column;align-items:center;gap:3px;font-size:11px;font-weight:700}
+.curve canvas{width:96px;height:46px;border-radius:4px;background:var(--screen);box-shadow:0 0 0 1px #000 inset}
+
+.gel{display:inline-flex;align-items:center;padding:6px 18px;border-radius:999px;font:700 12px var(--ui);color:#fff;border:1px solid var(--blue-dk);position:relative;cursor:pointer;
+  background:linear-gradient(var(--blue-lt),var(--blue) 48%,#3e9a28 52%,#6cc653);box-shadow:0 2px 4px rgba(0,0,0,.3), 0 1px 0 rgba(255,255,255,.5) inset;text-shadow:0 -1px 0 rgba(0,0,0,.3)}
+.gel::before{content:"";position:absolute;left:10px;right:10px;top:2px;height:45%;border-radius:999px;background:linear-gradient(rgba(255,255,255,.75),rgba(255,255,255,.1));pointer-events:none}
+.gel.grey{color:#222;border-color:#7d7d86;text-shadow:0 1px 0 #fff;background:linear-gradient(#fff,#d8d8dd 48%,#c4c4ca 52%,#e6e6ea)}
+.gel.small{padding:3px 12px;font-size:11px}
+.gel:focus-visible{outline:2px solid var(--blue-dk);outline-offset:2px}
+.dim{opacity:.4}
+
+/* pages */
+.tabs{display:flex;gap:0;margin-top:14px;border-bottom:1px solid #8e8e96;padding-left:10px}
+.tabs button{font:700 12px var(--ui);border:1px solid #8e8e96;border-bottom:0;border-radius:7px 7px 0 0;padding:6px 18px 5px;margin-right:-1px;cursor:pointer;color:#222;
+  background:linear-gradient(#fff,#d8d8dd 48%,#c4c4ca 52%,#e6e6ea);display:inline-flex;align-items:center;gap:7px;position:relative;top:1px}
+.tabs button[aria-selected="true"]{color:#fff;text-shadow:0 -1px 0 rgba(0,0,0,.3);background:linear-gradient(var(--blue-lt),var(--blue) 48%,#3e9a28 52%,#6cc653);border-color:var(--blue-dk)}
+.tabs button:focus-visible{outline:2px solid var(--blue-dk);outline-offset:1px}
+.led{width:8px;height:8px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#eee,#9c9ca4 60%,#6e6e78);box-shadow:0 0 0 1px rgba(0,0,0,.45) inset;flex:none}
+.led.on{background:radial-gradient(circle at 35% 30%,#e3f6fe,var(--blue) 60%,var(--blue-dk));box-shadow:0 0 6px var(--blue),0 0 0 1px rgba(0,0,0,.45) inset}
+.page[hidden]{display:none}
+.page .rows{margin-top:12px}
+/* bench extras */
+.extras{margin-top:12px;border-style:dashed;background:rgba(244,244,246,.55)}
+.extras legend{color:var(--ink-soft)}
+.prow{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:center}
+select,input[type=number]{font:12px var(--ui);padding:3px 6px;border:1px solid #7d7d86;border-radius:4px;background:linear-gradient(#fff,#ececef);box-shadow:inset 0 1px 1px rgba(0,0,0,.08)}
+select:focus-visible,input:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+.lane{display:grid;grid-template-columns:auto auto auto 1fr;gap:10px;align-items:center;margin-top:8px}
+.lane canvas{width:100%;height:54px;border-radius:4px;background:var(--screen);box-shadow:0 0 0 1px #000 inset;cursor:crosshair;touch-action:none}
+.check{display:inline-flex;align-items:center;gap:7px;font-weight:700;cursor:pointer}
+.check input{appearance:none;-webkit-appearance:none;width:16px;height:16px;margin:0;border-radius:4px;border:1px solid #7d7d86;cursor:pointer;
+  background:linear-gradient(#fff,#d8d8dd);box-shadow:0 1px 2px rgba(0,0,0,.2);position:relative}
+.check input:checked{border-color:var(--blue-dk);background:linear-gradient(var(--blue-lt),var(--blue) 48%,#3e9a28 52%,#6cc653)}
+.check input:checked::after{content:"";position:absolute;left:5px;top:1px;width:4px;height:9px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg)}
+.check input:focus-visible{box-shadow:0 0 0 2px var(--blue)}
+.note{font-size:11px;color:var(--ink-soft)}
+
+/* keyboard */
+.play{display:grid;grid-template-columns:auto 1fr;gap:10px;margin-top:14px}
+.bend{display:flex;flex-direction:column;align-items:center;gap:4px;font-size:11px;font-weight:700;width:50px}
+.bend input{writing-mode:vertical-lr;direction:rtl;width:24px;height:96px}
+.kbd{position:relative;height:118px;border-radius:6px;background:linear-gradient(#3a3a40,#1d1d22);padding:8px 8px 10px;box-shadow:inset 0 1px 0 rgba(255,255,255,.15),0 2px 4px rgba(0,0,0,.3)}
+.keys{position:relative;height:100%}
+.key{position:absolute;top:0;bottom:0;border-radius:0 0 5px 5px;display:flex;align-items:flex-end;justify-content:center;padding-bottom:6px;font:700 11px var(--mono);cursor:pointer;touch-action:none}
+.key.w{background:linear-gradient(#fff,#e6e6ea);border:1px solid #6e6e78;color:#6e6e78;z-index:1}
+.key.b{background:linear-gradient(#3b3b42,#111);height:62%;bottom:auto;color:#bbb;z-index:2;border:1px solid #000;font-size:10px;padding-bottom:4px}
+.key.on.w{background:linear-gradient(#e2f6d8,var(--blue));color:#fff}
+.key.on.b{background:linear-gradient(var(--blue-lt),var(--blue-dk));color:#fff}
+.key .c{position:absolute;top:6px;font:9px var(--ui);color:#9c9ca4;font-weight:400}
+
+.foot{display:flex;flex-wrap:wrap;align-items:center;gap:8px 18px;margin-top:12px;font-size:11px;color:var(--ink-soft)}
+.foot .sp{margin-left:auto}
+.err{display:none;margin-top:10px;padding:8px 10px;border-left:4px solid var(--blue-dk);background:#eef8e9;font-size:12px}
+/* source readout */
+.srcs{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:8px}
+.src{font:11px/1.3 var(--mono);color:var(--lcd);letter-spacing:1px;display:grid;grid-template-columns:auto 1fr;gap:2px 8px;align-items:center}
+.src b{font-weight:400;opacity:.6}
+.src .bar{height:5px;border-radius:2px;background:rgba(169,224,143,.15);overflow:hidden}
+.src .bar i{display:block;height:100%;width:0;background:var(--blue)}
+.src.off{opacity:.3}
+@media (max-width:720px){ .titlebar .tag{display:none} .play{grid-template-columns:1fr} .bend{flex-direction:row;width:auto} .bend input{writing-mode:horizontal-tb;direction:ltr;width:160px;height:auto} .srcs{grid-template-columns:1fr} }
+</style>
+</head>
+<body>
+<div class="window" role="application" aria-label="Syrinx test bench">
+  <div class="titlebar">
+    <span class="mark" aria-hidden="true"></span>
+    <h1>Syrinx</h1>
+    <span class="sub">Bytebent Audio<span class="ver">bench v0.1</span></span>
+    <span class="tag">bird voice · one to three sources per voice</span>
+  </div>
+  <div class="body">
+    <div class="screen">
+      <div class="view">
+        <canvas id="spec" aria-label="Scrolling spectrogram of the output, 0 to 20 kHz"></canvas>
+        <canvas id="axis" class="axis" aria-hidden="true"></canvas>
+        <span class="lbl">SPECTROGRAM · 0–20 kHz · LAST 3 S</span>
+      </div>
+      <div class="srcs" aria-live="off">
+        <div class="src off" id="src0"><b>LEFT</b><span class="f">—</span><b>LEVEL</b><span class="bar"><i></i></span></div>
+        <div class="src off" id="src1"><b>RIGHT</b><span class="f">—</span><b>LEVEL</b><span class="bar"><i></i></span></div>
+        <div class="src off" id="src2"><b>MEMBRANE</b><span class="f">—</span><b>LEVEL</b><span class="bar"><i></i></span></div>
+      </div>
+      <div class="readouts" aria-live="off">
+        <span title="Where the newest voice sits between tonal (Hopf, 0) and rich (SNILC, 1), after Link and Chaos"><b>REGIME</b><span id="roReg">—</span></span>
+        <span title="Spectral content of the source: energy-weighted mean harmonic number (1 is a pure tone)"><b>CONTENT</b><span id="roSci">—</span></span>
+        <span title="Pitch keeper correction on each side (Lock on)"><b>KEEPER</b><span id="roKeep">—</span></span>
+        <span title="Integration sub-steps per 4x sample: the cost of rich high notes"><b>STEPS</b><span id="roSub">—</span></span>
+        <span><b>VOICES</b><span id="roVo">0</span></span>
+        <span><b>OCT</b><span id="roOct">C3</span></span>
+        <span><b>VEL</b><span id="roVel">100</span></span>
+        <span><b>BEND</b><span id="roBend">0</span></span>
+        <span title="Share of one CPU core the engine needs to keep up, averaged over half a second; peak is the slowest single audio callback. This is the JavaScript reference engine; the plugin's C++ will be lighter."><b>DSP</b><span id="roCpu">—</span></span>
+      </div>
+      <div class="power" id="power">
+        <button class="gel" id="powerBtn" type="button">Power on</button>
+        <span>PLAY WITH THE COMPUTER KEYBOARD: A–; · Z/X OCTAVE · C/V VELOCITY</span>
+      </div>
+    </div>
+
+    <div class="rows">
+      <fieldset><legend><span class="dot"></span>Source</legend><div class="knobs" id="g-source"></div></fieldset>
+      <fieldset><legend><span class="dot"></span>Sides</legend><div class="knobs" id="g-sides"></div></fieldset>
+      <fieldset><legend><span class="dot"></span>Breath</legend><div class="knobs" id="g-breath"></div></fieldset>
+      <fieldset><legend><span class="dot"></span>Pattern</legend><div class="knobs" id="g-pattern"></div></fieldset>
+      <fieldset><legend><span class="dot"></span>Nonlinear</legend><div class="knobs" id="g-nonlin"></div></fieldset>
+      <fieldset><legend><span class="dot"></span>Muscles</legend><div class="knobs" id="g-muscles"></div></fieldset>
+      <fieldset><legend><span class="dot"></span>Pitch</legend><div class="knobs" id="g-pitch"></div></fieldset>
+      <fieldset><legend><span class="dot"></span>Lock</legend><div class="knobs" id="g-lock"></div></fieldset>
+      <fieldset><legend><span class="dot"></span>Output</legend><div class="knobs" id="g-out"></div></fieldset>
+    </div>
+
+    <fieldset class="extras">
+      <legend><span class="dot" style="background:#fff;box-shadow:0 0 0 1px #6e6e78 inset"></span>Bench only: test presets</legend>
+      <div class="prow">
+        <label for="presetSel" style="font-weight:700">Test preset</label>
+        <select id="presetSel"></select>
+        <button class="gel small" id="presetLoad" type="button">Load</button>
+        <button class="gel grey small" id="presetPlay" type="button">Load and play</button>
+        <button class="gel grey small" id="resetAll" type="button">Reset to defaults</button>
+        <span class="note">Test presets stay out of the plugin build.</span>
+      </div>
+      <div class="note" id="presetAbout" style="margin-top:6px"></div>
+    </fieldset>
+
+    <div class="play">
+      <div class="bend"><span>Bend</span><input type="range" id="bend" min="-1" max="1" step="0.001" value="0" aria-label="Pitch bend, springs back"></div>
+      <div class="kbd"><div class="keys" id="keys"></div></div>
+    </div>
+    <div class="foot">
+      <label>Tempo (for Sync) <input type="number" id="tempo" min="40" max="240" value="120" style="width:64px"> BPM</label>
+      <span class="segwrap" style="flex-direction:row;padding:0" id="chanWrap" title="Independent play mode: which side the keyboard plays (MIDI channel 1 or 2)">Keys play <span class="seg" role="group" aria-label="Keys play side"><button type="button" data-ch="0" aria-pressed="true">Left</button><button type="button" data-ch="1" aria-pressed="false">Right</button></span></span>
+      <span>Latency 32 samples · 4× oversampled</span>
+      <button class="gel grey sp" id="panic" type="button">All notes off</button>
+    </div>
+    <div class="err" id="err"></div>
+  </div>
+</div>
+
+<script type="text/plain" id="dsp">
+/*__DSP__*/
+</script>
+<script>
+/*__PRESETS__*/
+</script>
+<script>
+(function () {
+  'use strict';
+  /* ---------- control specs (ranges match syrinx-engine.js) ---------- */
+  const pct = v => Math.round(v * 100) + '%';
+  const secs = v => v < 1 ? Math.round(v * 1000) + ' ms' : v.toFixed(2) + ' s';
+  const sgn = v => (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v);
+  const oct = v => (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v).toFixed(2) + ' oct';
+  const hz = f => f >= 1000 ? (f / 1000).toFixed(f >= 10000 ? 1 : 2) + ' kHz' : Math.round(f) + ' Hz';
+  const st = v => sgn(+v.toFixed(Math.abs(v - Math.round(v)) < 0.005 ? 0 : 1)) + ' st';
+  const SIZES = [[0.05, 'Wren'], [0.38, 'Songbird'], [0.62, 'Dove'], [0.85, 'Large bird'], [1.01, 'Crane']];
+  const SPECS = [
+    // source
+    { g: 'g-source', type: 'seg', id: 'topology', name: 'Topology', opts: ['Duplex', 'Single', 'Triple'], def: 0 },
+    { g: 'g-source', type: 'knob', id: 'regime', name: 'Regime', min: 0, max: 1, def: 0.3, big: true, fmt: v => v < 0.02 ? 'Tonal' : v > 0.98 ? 'Rich' : 'T ' + Math.round((1 - v) * 100) + ' · R ' + Math.round(v * 100) },
+    { g: 'g-source', type: 'knob', id: 'link', name: 'Link', min: 0, max: 1, def: 0.7, fmt: pct },
+    { g: 'g-source', type: 'knob', id: 'grain', name: 'Grain', min: 0, max: 1, def: 0.15, fmt: pct },
+    { g: 'g-source', type: 'knob', id: 'breathbend', name: 'Breath bend', min: 0, max: 1, def: 0, fmt: v => v.toFixed(2) + ' oct' },
+    { g: 'g-source', type: 'knob', id: 'membrane', name: 'Membrane', min: -48, max: 12, def: -24, bipolarAt: 0, fmt: st },
+    { g: 'g-source', type: 'knob', id: 'memlevel', name: 'Mem. level', min: 0, max: 1, def: 0.5, fmt: pct },
+    // sides
+    { g: 'g-sides', type: 'seg', id: 'playmode', name: 'Play mode', opts: ['Handoff', 'Interval', 'Duo', 'Independent'], def: 0 },
+    { g: 'g-sides', type: 'knob', id: 'split', name: 'Split', min: 500, max: 8000, def: 3500, log: true, fmt: hz },
+    { g: 'g-sides', type: 'knob', id: 'overlap', name: 'Overlap', min: 0, max: 1500, def: 300, fmt: hz },
+    { g: 'g-sides', type: 'knob', id: 'interval', name: 'Interval', min: -24, max: 24, def: 7.3, bipolarAt: 0.5, fmt: st },
+    { g: 'g-sides', type: 'knob', id: 'asym', name: 'Asymmetry', min: 0, max: 1, def: 0.2, fmt: pct },
+    { g: 'g-sides', type: 'knob', id: 'balance', name: 'Balance', min: -1, max: 1, def: 0, bipolarAt: 0.5, fmt: v => Math.abs(v) < 0.01 ? 'Centre' : (v < 0 ? 'L ' : 'R ') + Math.round(Math.abs(v) * 100) },
+    { g: 'g-sides', type: 'knob', id: 'coupling', name: 'Coupling', min: 0, max: 1, def: 0.1, big: true, fmt: pct },
+    // breath
+    { g: 'g-breath', type: 'knob', id: 'pressure', name: 'Pressure', min: 0, max: 1, def: 0.7, big: true, fmt: pct },
+    { g: 'g-breath', type: 'knob', id: 'attack', name: 'Attack', min: 0.001, max: 5, def: 0.008, curve: 3, fmt: secs },
+    { g: 'g-breath', type: 'knob', id: 'decay', name: 'Decay', min: 0.001, max: 5, def: 0.3, curve: 3, fmt: secs },
+    { g: 'g-breath', type: 'knob', id: 'sustain', name: 'Sustain', min: 0, max: 1, def: 0.8, fmt: pct },
+    { g: 'g-breath', type: 'knob', id: 'release', name: 'Release', min: 0.001, max: 8, def: 0.03, curve: 3, fmt: secs },
+    { g: 'g-breath', type: 'knob', id: 'minibreath', name: 'Minibreath', min: 0, max: 1, def: 0.6, fmt: pct },
+    // pattern
+    { g: 'g-pattern', type: 'seg', id: 'pattern', name: 'Pattern', opts: ['Off', 'On'], def: 0 },
+    { g: 'g-pattern', type: 'knob', id: 'sylrate', name: 'Rate', long: 'Syllable rate', min: 0.5, max: 60, def: 8, log: true, big: true, fmt: v => (v < 10 ? v.toFixed(1) : Math.round(v)) + '/s' },
+    { g: 'g-pattern', type: 'seg', id: 'sync', name: 'Sync', opts: ['Off', 'On'], def: 0 },
+    { g: 'g-pattern', type: 'knob', id: 'duty', name: 'Duty', min: 0.05, max: 0.95, def: 0.6, fmt: pct },
+    { g: 'g-pattern', type: 'seg', id: 'shape', name: 'Shape', opts: ['Flat', 'Up', 'Down', 'Convex', 'Concave', 'Wave'], def: 2 },
+    { g: 'g-pattern', type: 'curve' },
+    { g: 'g-pattern', type: 'knob', id: 'sweep', name: 'Sweep', min: -4, max: 4, def: 1, bipolarAt: 0.5, fmt: oct },
+    { g: 'g-pattern', type: 'seg', id: 'sides', name: 'Sides', opts: ['Auto', 'Left', 'Right', 'Alternate'], def: 0 },
+    { g: 'g-pattern', type: 'knob', id: 'trill', name: 'Trill limit', min: 0, max: 1, def: 0.7, fmt: v => v < 0.01 ? 'Off' : pct(v) },
+    { g: 'g-pattern', type: 'knob', id: 'jitter', name: 'Jitter', min: 0, max: 1, def: 0.05, fmt: pct },
+    // nonlinear
+    { g: 'g-nonlin', type: 'knob', id: 'jumps', name: 'Jumps', min: 0, max: 1, def: 0, fmt: pct },
+    { g: 'g-nonlin', type: 'knob', id: 'trachea', name: 'Trachea', min: 1, max: 200, def: 3.5, log: true, fmt: v => (v < 10 ? v.toFixed(1) : Math.round(v)) + ' cm' },
+    { g: 'g-nonlin', type: 'knob', id: 'chaos', name: 'Chaos', min: 0, max: 1, def: 0, fmt: pct },
+    // muscles
+    { g: 'g-muscles', type: 'knob', id: 'wobblerate', name: 'Wobble rate', min: 0, max: 250, def: 0, fmt: v => v < 0.5 ? 'Off' : Math.round(v) + ' Hz' },
+    { g: 'g-muscles', type: 'knob', id: 'wobble', name: 'Wobble', min: 0, max: 1, def: 0, fmt: pct },
+    { g: 'g-muscles', type: 'knob', id: 'wobblefm', name: 'AM · FM', min: 0, max: 1, def: 0, fmt: v => v < 0.02 ? 'AM' : v > 0.98 ? 'FM' : 'A ' + Math.round((1 - v) * 100) + ' · F ' + Math.round(v * 100) },
+    // pitch
+    { g: 'g-pitch', type: 'seg', id: 'mode', name: 'Voices', opts: ['Mono', 'Poly'], def: 0 },
+    { g: 'g-pitch', type: 'knob', id: 'size', name: 'Size', min: 0, max: 1, def: 0.25, big: true, fmt: v => SIZES.find(s => v < s[0])[1] },
+    { g: 'g-pitch', type: 'knob', id: 'tempolock', name: 'Tempo lock', min: 0, max: 1, def: 0.5, fmt: pct },
+    { g: 'g-pitch', type: 'knob', id: 'transpose', name: 'Transpose', min: -24, max: 60, def: 36, step: 1, bipolarAt: 0, fmt: v => sgn(Math.round(v)) + ' st' },
+    { g: 'g-pitch', type: 'knob', id: 'detune', name: 'Detune', min: -100, max: 100, def: 0, bipolarAt: 0.5, fmt: v => sgn(Math.round(v)) + ' ct' },
+    { g: 'g-pitch', type: 'knob', id: 'glide', name: 'Glide', min: 0, max: 2, def: 0.02, curve: 3, fmt: v => v < 0.0015 ? 'Off' : secs(v) },
+    { g: 'g-pitch', type: 'knob', id: 'bendrange', name: 'Bend range', min: 2, max: 48, def: 12, step: 1, fmt: v => '±' + Math.round(v) + ' st' },
+    // lock
+    { g: 'g-lock', type: 'seg', id: 'lock', name: 'Lock', opts: ['Off', 'On'], def: 0 },
+    { g: 'g-lock', type: 'seg', id: 'glidestyle', name: 'Glide style', opts: ['Smooth', 'Stepped'], def: 0 },
+    // output
+    { g: 'g-out', type: 'seg', id: 'filter', name: 'Filter', opts: ['Off', 'On'], def: 1 },
+    { g: 'g-out', type: 'knob', id: 'volume', name: 'Volume', min: -48, max: 6, def: -6, fmt: v => (v > 0 ? '+' : '') + v.toFixed(1) + ' dB' },
+  ];
+
+  /* ---------- audio ---------- */
+  let ctx = null, node = null, analyser = null, ready = false, starting = null;
+  const state = {};
+  const queue = [];
+  function send(msg) { if (ready) node.port.postMessage(msg); else queue.push(msg); }
+  function showError(t) { const e = document.getElementById('err'); e.style.display = 'block'; e.textContent = t; }
+
+  function start() {
+    if (starting) return starting;
+    starting = (async () => {
+      try {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        ctx = new AC({ latencyHint: 'interactive' });
+        if (!ctx.audioWorklet) throw new Error('This browser has no AudioWorklet support. Try a current Chrome, Edge, Firefox or Safari.');
+        const src = document.getElementById('dsp').textContent;
+        const blobUrl = () => URL.createObjectURL(new Blob([src], { type: 'application/javascript' }));
+        const dataUrl = () => 'data:application/javascript;charset=utf-8,' + encodeURIComponent(src);
+        const tries = location.protocol === 'file:' ? [dataUrl, blobUrl] : [blobUrl, dataUrl];
+        let loaded = false, lastErr = null;
+        for (const mk of tries) { try { await ctx.audioWorklet.addModule(mk()); loaded = true; break; } catch (err) { lastErr = err; } }
+        if (!loaded) throw lastErr;
+        node = new AudioWorkletNode(ctx, 'syrinx-processor', { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [2] });
+        analyser = ctx.createAnalyser(); analyser.fftSize = 2048; analyser.smoothingTimeConstant = 0;
+        analyser.minDecibels = -105; analyser.maxDecibels = -20;
+        node.connect(ctx.destination); node.connect(analyser);
+        node.port.onmessage = onMsg;
+        node.onprocessorerror = () => showError('The audio engine stopped with an error. Reload the page.');
+        ready = true;
+        const all = {}; for (const s of SPECS) if (s.id) all[s.id] = state[s.id];
+        node.port.postMessage({ t: 'many', p: all });
+        node.port.postMessage({ t: 'tempo', v: +document.getElementById('tempo').value || 120 });
+        while (queue.length) node.port.postMessage(queue.shift());
+        if (ctx.state !== 'running') await ctx.resume();
+        document.getElementById('power').classList.add('hide');
+      } catch (err) { showError('Audio could not start: ' + (err && err.message || err)); starting = null; }
+    })();
+    return starting;
+  }
+  document.getElementById('powerBtn').addEventListener('click', start);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) allOff(); });
+
+  /* ---------- knobs and switches ---------- */
+  const knobs = {}, segs = {};
+  function toNorm(s, v) {
+    if (s.log) return Math.log(v / s.min) / Math.log(s.max / s.min);
+    const n = (v - s.min) / (s.max - s.min);
+    return s.curve ? Math.pow(Math.max(0, n), 1 / s.curve) : n;
+  }
+  function fromNorm(s, n) {
+    n = Math.min(1, Math.max(0, n));
+    let v = s.log ? s.min * Math.pow(s.max / s.min, n) : s.min + (s.max - s.min) * (s.curve ? Math.pow(n, s.curve) : n);
+    if (s.step) v = Math.round(v / s.step) * s.step;
+    return v;
+  }
+  function makeKnob(s, host) {
+    const el = document.createElement('div');
+    el.className = 'knob' + (s.big ? ' big' : '');
+    el.innerHTML = '<div class="dial" tabindex="0" role="slider"><div class="cap"></div><div class="ptr"></div></div><span class="name"></span><span class="val"></span>';
+    const dial = el.firstChild, valEl = el.children[2];
+    el.children[1].textContent = s.name;
+    dial.setAttribute('aria-label', s.long || s.name);
+    host.appendChild(el);
+    const k = { s, el, dial, valEl, norm: toNorm(s, s.def) };
+    k.set = (n, quiet) => {
+      k.norm = Math.min(1, Math.max(0, n));
+      const v = fromNorm(s, k.norm);
+      if (s.step) k.norm = toNorm(s, v);
+      state[s.id] = v;
+      const nn = k.norm;
+      let a0 = 0, a1 = nn;
+      if (s.bipolarAt !== undefined) { const c = s.bipolarAt === 0 ? toNorm(s, 0) : s.bipolarAt; a0 = Math.min(nn, c); a1 = Math.max(nn, c); }
+      dial.style.setProperty('--a0', (a0 * 270) + 'deg');
+      dial.style.setProperty('--a1', (a1 * 270) + 'deg');
+      dial.querySelector('.ptr').style.transform = 'rotate(' + (-135 + nn * 270) + 'deg)';
+      const txt = s.fmt(v);
+      valEl.textContent = txt;
+      dial.setAttribute('aria-valuenow', v.toFixed(3));
+      dial.setAttribute('aria-valuetext', txt);
+      if (!quiet) send({ t: 'p', id: s.id, v });
+      if (s.id === 'sweep') drawCurve();
+      updateDims();
+    };
+    let dragY = null, startN = 0;
+    dial.addEventListener('pointerdown', e => { dial.setPointerCapture(e.pointerId); dragY = e.clientY; startN = k.norm; dial.focus(); e.preventDefault(); });
+    dial.addEventListener('pointermove', e => {
+      if (dragY === null) return;
+      const d = (dragY - e.clientY) * (e.shiftKey ? 0.0008 : 0.005);
+      k.set(startN + d);
+      if (e.shiftKey) { dragY = e.clientY; startN = k.norm; }
+    });
+    const end = () => { dragY = null; };
+    dial.addEventListener('pointerup', end); dial.addEventListener('pointercancel', end);
+    dial.addEventListener('dblclick', () => k.set(toNorm(s, s.def)));
+    dial.addEventListener('wheel', e => { e.preventDefault(); k.set(k.norm - Math.sign(e.deltaY) * (e.shiftKey ? 0.005 : 0.03)); }, { passive: false });
+    dial.addEventListener('keydown', e => {
+      const stp = s.step ? 1 / ((s.max - s.min) / s.step) : (e.shiftKey ? 0.005 : 0.02);
+      let used = true;
+      if (e.key === 'ArrowUp' || e.key === 'ArrowRight') k.set(k.norm + stp);
+      else if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') k.set(k.norm - stp);
+      else if (e.key === 'Home') k.set(0);
+      else if (e.key === 'End') k.set(1);
+      else used = false;
+      if (used) { e.preventDefault(); e.stopPropagation(); }
+    });
+    knobs[s.id] = k;
+    k.set(k.norm, true);
+  }
+  function makeSeg(s, host) {
+    const w = document.createElement('div'); w.className = 'segwrap';
+    w.innerHTML = '<span></span><div class="seg" role="group"></div>';
+    w.firstChild.textContent = s.name;
+    const seg = w.lastChild; seg.setAttribute('aria-label', s.name);
+    const btns = s.opts.map((o, i) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = o; b.dataset.v = i; seg.appendChild(b); return b; });
+    host.appendChild(w);
+    const g = { s, el: w };
+    g.set = (v, quiet) => {
+      v = Math.round(v); state[s.id] = v;
+      btns.forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.v === v)));
+      if (!quiet) send({ t: 'p', id: s.id, v });
+      if ((s.id === 'mode' || s.id === 'playmode' || s.id === 'topology') && !quiet) releaseKeys();
+      if (s.id === 'shape' || s.id === 'lock' || s.id === 'glidestyle') drawCurve();
+      updateDims();
+    };
+    btns.forEach(b => b.addEventListener('click', () => g.set(+b.dataset.v)));
+    segs[s.id] = g;
+    g.set(s.def, true);
+  }
+  let curveCanvas = null;
+  function makeCurve(host) {
+    const w = document.createElement('div'); w.className = 'curve';
+    w.innerHTML = '<canvas aria-label="Syllable pitch path"></canvas><span>Syllable</span>';
+    host.appendChild(w); curveCanvas = w.firstChild; segs._curve = { el: w };
+  }
+  for (const s of SPECS) {
+    const host = document.getElementById(s.g);
+    if (s.type === 'knob') makeKnob(s, host); else if (s.type === 'seg') makeSeg(s, host); else makeCurve(host);
+  }
+
+  function shapeAt(shape, u) {
+    switch (shape) {
+      case 1: return 1 - (1 - u) * (1 - u);
+      case 2: return -(1 - (1 - u) * (1 - u));
+      case 3: return Math.sin(Math.PI * u);
+      case 4: return -Math.sin(Math.PI * u);
+      case 5: return Math.sin(3 * Math.PI * u);
+      default: return 0;
+    }
+  }
+  // the syllable's pitch path over one cycle (sound share = Duty); with Lock it is in semitones
+  function drawCurve() {
+    if (!curveCanvas || state.shape === undefined || state.sweep === undefined) return;
+    const c = curveCanvas, d = window.devicePixelRatio || 1, r = c.getBoundingClientRect();
+    c.width = Math.max(1, Math.round(r.width * d)); c.height = Math.max(1, Math.round(r.height * d));
+    const x = c.getContext('2d'), W = c.width, H = c.height, mid = H / 2;
+    x.clearRect(0, 0, W, H);
+    x.strokeStyle = 'rgba(169,224,143,.15)'; x.lineWidth = 1;
+    x.beginPath(); x.moveTo(0, mid); x.lineTo(W, mid); x.stroke();
+    const lock = state.lock === 1, stepped = lock && state.glidestyle === 1;
+    let sw = state.sweep || 0; if (lock) sw = Math.round(sw * 12) / 12;
+    const k = (H * 0.42) / Math.max(1, Math.abs(sw));
+    x.strokeStyle = '#4fae36'; x.lineWidth = 2 * d; x.shadowColor = '#4fae36'; x.shadowBlur = 6 * d;
+    x.beginPath();
+    for (let i = 0; i <= 120; i++) {
+      const u = i / 120; let p = sw * shapeAt(state.shape, u); if (stepped) p = Math.round(p * 12) / 12;
+      const y = mid - p * k;
+      i ? x.lineTo(u * W * 0.82, y) : x.moveTo(0, y);
+    }
+    x.lineTo(W, mid - sw * shapeAt(state.shape, 1) * k);
+    x.stroke(); x.shadowBlur = 0;
+  }
+
+  function dim(id, off, why) {
+    const t = knobs[id] || segs[id]; if (!t) return;
+    t.el.classList.toggle('dim', off); t.el.title = off ? why : '';
+  }
+  function updateDims() {
+    if (Object.keys(state).length < SPECS.filter(s => s.id).length) return;
+    const topo = state.topology, duplex = topo === 0, pm = state.playmode, pat = state.pattern === 1;
+    dim('membrane', topo !== 2, 'Membrane works in Triple'); dim('memlevel', topo !== 2, 'Membrane level works in Triple');
+    dim('playmode', !duplex, 'Play modes work in Duplex (Single and Triple have one labial source)');
+    dim('split', !duplex || pm !== 0, 'Split works in Duplex, Handoff'); dim('overlap', !duplex || pm !== 0, 'Overlap works in Duplex, Handoff');
+    dim('interval', !duplex || pm !== 1, 'Interval works in Duplex, Interval mode');
+    dim('coupling', topo === 1, 'Single: the folds are tied by Asymmetry');
+    for (const id of ['sylrate', 'sync', 'duty', 'shape', '_curve', 'sweep', 'sides', 'trill', 'jitter', 'minibreath']) dim(id, !pat, 'Works with Pattern on');
+    dim('tempolock', !pat, 'Tempo lock changes syllable timing (Pattern on)');
+    dim('trachea', state.jumps === 0 && state.chaos === 0 && state.filter === 0, 'The tube sounds with Filter on, Jumps or Chaos');
+    dim('wobble', state.wobblerate < 0.5, 'Set a Wobble rate'); dim('wobblefm', state.wobblerate < 0.5, 'Set a Wobble rate');
+    dim('glide', state.mode === 1, 'Glide works in Mono only');
+    dim('glidestyle', state.lock !== 1, 'Glide style works with Lock on');
+    document.getElementById('chanWrap').classList.toggle('dim', !(duplex && pm === 3));
+  }
+  updateDims(); drawCurve();
+  window.addEventListener('resize', drawCurve);
+
+  function setValue(id, v, quiet) {
+    if (segs[id]) segs[id].set(v, quiet);
+    else if (knobs[id]) knobs[id].set(toNorm(knobs[id].s, v), quiet);
+  }
+  function sendAll() { const all = {}; for (const s of SPECS) if (s.id) all[s.id] = state[s.id]; send({ t: 'many', p: all }); }
+  function resetAll() { for (const s of SPECS) if (s.id) setValue(s.id, s.def, true); sendAll(); drawCurve(); }
+  document.getElementById('resetAll').addEventListener('click', () => { stopPhrase(); allOff(); resetAll(); });
+
+  /* ---------- test presets ---------- */
+  const PRESETS = window.SyrinxPresets || [];
+  const sel = document.getElementById('presetSel'), about = document.getElementById('presetAbout');
+  PRESETS.forEach((p, i) => { const o = document.createElement('option'); o.value = i; o.textContent = (i + 1) + '. ' + p.name; sel.appendChild(o); });
+  sel.addEventListener('keydown', e => e.stopPropagation());
+  const showAbout = () => { const pr = PRESETS[+sel.value]; about.textContent = pr ? pr.about : ''; };
+  sel.addEventListener('change', showAbout); showAbout();
+  let timers = [], sweepTimer = null;
+  function stopPhrase() {
+    timers.forEach(clearTimeout); timers = [];
+    if (sweepTimer) { clearInterval(sweepTimer); sweepTimer = null; }
+  }
+  function loadPreset() {
+    const pr = PRESETS[+sel.value]; if (!pr) return null;
+    stopPhrase(); allOff(); resetAll();
+    for (const k in pr.params) setValue(k, pr.params[k], true);
+    sendAll(); drawCurve();
+    return pr;
+  }
+  document.getElementById('presetLoad').addEventListener('click', loadPreset);
+  // play the preset's phrase as the renders do: notes at their times, a sweep across the phrase, a switch at its time
+  document.getElementById('presetPlay').addEventListener('click', async () => {
+    await start();
+    const pr = loadPreset(); if (!pr) return;
+    const end = Math.max(...pr.phrase.map(([, t, d]) => t + d));
+    for (const [n, t, d] of pr.phrase) {
+      timers.push(setTimeout(() => send({ t: 'on', n, v: 100 }), t * 1000));
+      timers.push(setTimeout(() => send({ t: 'off', n }), (t + d) * 1000));
+    }
+    if (pr.switchAt) timers.push(setTimeout(() => setValue(pr.switchAt.id, pr.switchAt.value), pr.switchAt.time * 1000));
+    if (pr.sweep) {
+      const t0 = performance.now(), sw = pr.sweep;
+      sweepTimer = setInterval(() => {
+        const u = Math.min(1, (performance.now() - t0) / 1000 / end);
+        setValue(sw.id, sw.from + (sw.to - sw.from) * u);
+        if (u >= 1) { clearInterval(sweepTimer); sweepTimer = null; }
+      }, 30);
+    }
+  });
+
+  /* ---------- pitch bend, tempo, MIDI channel ---------- */
+  const bendEl = document.getElementById('bend'), roBend = document.getElementById('roBend');
+  const sendBend = () => { send({ t: 'bend', v: +bendEl.value }); roBend.textContent = (+bendEl.value * (state.bendrange || 12)).toFixed(1) + ' st'; };
+  bendEl.addEventListener('input', sendBend);
+  const springBack = () => { bendEl.value = 0; sendBend(); };
+  bendEl.addEventListener('pointerup', springBack); bendEl.addEventListener('pointercancel', springBack);
+  bendEl.addEventListener('keydown', e => e.stopPropagation()); bendEl.addEventListener('keyup', e => { e.stopPropagation(); springBack(); });
+  const tempoEl = document.getElementById('tempo');
+  tempoEl.addEventListener('change', () => send({ t: 'tempo', v: +tempoEl.value || 120 }));
+  tempoEl.addEventListener('keydown', e => e.stopPropagation());
+  let chan = 0;
+  const chanBtns = document.querySelectorAll('#chanWrap button');
+  chanBtns.forEach(b => b.addEventListener('click', () => { chan = +b.dataset.ch; chanBtns.forEach(x => x.setAttribute('aria-pressed', String(x === b))); }));
+
+  /* ---------- PC keyboard as a MIDI keyboard (Ableton layout) ---------- */
+  const KEYMAP = { KeyA: 0, KeyW: 1, KeyS: 2, KeyE: 3, KeyD: 4, KeyF: 5, KeyT: 6, KeyG: 7, KeyY: 8, KeyH: 9, KeyU: 10, KeyJ: 11,
+                   KeyK: 12, KeyO: 13, KeyL: 14, KeyP: 15, Semicolon: 16 };
+  const KEYCAP = { KeyA: 'A', KeyW: 'W', KeyS: 'S', KeyE: 'E', KeyD: 'D', KeyF: 'F', KeyT: 'T', KeyG: 'G', KeyY: 'Y', KeyH: 'H', KeyU: 'U', KeyJ: 'J',
+                   KeyK: 'K', KeyO: 'O', KeyL: 'L', KeyP: 'P', Semicolon: ';' };
+  const VELS = [1, 20, 40, 60, 80, 100, 127];
+  let octave = 3, velIdx = 5;                 // Ableton naming: C3 = MIDI 60 (about 2.1 kHz at the default Transpose)
+  const down = new Map(), sounding = new Map();
+  const noteName = m => ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'][m % 12] + (Math.floor(m / 12) - 2);
+  function baseNote() { return (octave + 2) * 12; }
+  function noteOn(srcKey, midi) {
+    if (down.has(srcKey) || midi < 0 || midi > 127) return;
+    start();
+    down.set(srcKey, [midi, chan]);
+    sounding.set(midi, (sounding.get(midi) || 0) + 1);
+    send({ t: 'on', n: midi, v: VELS[velIdx], ch: chan });
+    paintKeys();
+  }
+  function noteOff(srcKey) {
+    if (!down.has(srcKey)) return;
+    const [midi, ch] = down.get(srcKey); down.delete(srcKey);
+    const c = (sounding.get(midi) || 1) - 1;
+    if (c <= 0) { sounding.delete(midi); send({ t: 'off', n: midi, ch }); } else sounding.set(midi, c);
+    paintKeys();
+  }
+  function releaseKeys() { down.clear(); sounding.clear(); paintKeys(); }
+  function allOff() { releaseKeys(); send({ t: 'panic' }); }
+  document.getElementById('panic').addEventListener('click', () => { stopPhrase(); allOff(); });
+  window.addEventListener('blur', allOff);
+  window.addEventListener('keydown', e => {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.target && (e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT')) return;
+    if (e.code in KEYMAP) { e.preventDefault(); if (!e.repeat) noteOn(e.code, baseNote() + KEYMAP[e.code]); return; }
+    if (e.repeat) return;
+    if (e.code === 'KeyZ') octave = Math.max(-2, octave - 1);
+    else if (e.code === 'KeyX') octave = Math.min(8, octave + 1);
+    else if (e.code === 'KeyC') velIdx = Math.max(0, velIdx - 1);
+    else if (e.code === 'KeyV') velIdx = Math.min(VELS.length - 1, velIdx + 1);
+    else return;
+    e.preventDefault();
+    updateKeyLabels();
+  });
+  window.addEventListener('keyup', e => { if (e.code in KEYMAP) noteOff(e.code); });
+
+  const keysEl = document.getElementById('keys'), keyEls = [];
+  const whiteSemis = [0, 2, 4, 5, 7, 9, 11, 12, 14, 16];
+  const isBlack = s => [1, 3, 6, 8, 10, 13, 15].includes(s);
+  Object.keys(KEYMAP).forEach(code => {
+    const semi = KEYMAP[code], el = document.createElement('div');
+    el.className = 'key ' + (isBlack(semi) ? 'b' : 'w');
+    el.dataset.semi = semi;
+    el.innerHTML = '<span class="c"></span>' + KEYCAP[code];
+    if (isBlack(semi)) { const left = whiteSemis.filter(w => w < semi).length; el.style.left = 'calc(' + (left * 10) + '% - 3.2%)'; el.style.width = '6.4%'; }
+    else { el.style.left = (whiteSemis.indexOf(semi) * 10) + '%'; el.style.width = '10%'; }
+    const pid = 'ptr' + semi;
+    el.addEventListener('pointerdown', e => { el.setPointerCapture(e.pointerId); noteOn(pid, baseNote() + semi); e.preventDefault(); });
+    const up = () => noteOff(pid);
+    el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up); el.addEventListener('lostpointercapture', up);
+    keysEl.appendChild(el); keyEls.push(el);
+  });
+  function paintKeys() { const b = baseNote(); for (const el of keyEls) el.classList.toggle('on', sounding.has(b + +el.dataset.semi)); }
+  function updateKeyLabels() {
+    const b = baseNote();
+    for (const el of keyEls) { const s = +el.dataset.semi; el.firstChild.textContent = (s % 12 === 0) ? noteName(b + s) : ''; }
+    document.getElementById('roOct').textContent = noteName(b);
+    document.getElementById('roVel').textContent = VELS[velIdx];
+    paintKeys();
+  }
+  updateKeyLabels();
+
+  /* ---------- live view ---------- */
+  const srcEls = [0, 1, 2].map(j => { const el = document.getElementById('src' + j); return { el, f: el.querySelector('.f'), bar: el.querySelector('.bar i') }; });
+  const roReg = document.getElementById('roReg'), roSci = document.getElementById('roSci'), roKeep = document.getElementById('roKeep');
+  const roSub = document.getElementById('roSub'), roVo = document.getElementById('roVo'), roCpu = document.getElementById('roCpu');
+  const noteOf = f => { const m = 69 + 12 * Math.log2(f / 440), r = Math.round(m), c = Math.round((m - r) * 100); return noteName(r) + (c ? ' ' + (c > 0 ? '+' : '−') + Math.abs(c) : ''); };
+  function onMsg(e) {
+    const m = e.data;
+    if (m.t !== 'stat') return;
+    const on = m.voices > 0 && m.src;
+    for (let j = 0; j < 3; j++) {
+      const s = on ? m.src[j] : null, live = !!(s && s.on && s.g > 0.01);
+      srcEls[j].el.classList.toggle('off', !live);
+      srcEls[j].f.textContent = live ? hz(s.f) + ' · ' + noteOf(s.f) : '—';
+      srcEls[j].bar.style.width = (live ? Math.round(Math.min(1, s.g) * 100) : 0) + '%';
+    }
+    roReg.textContent = on ? m.regime.toFixed(2) : '—';
+    roSci.textContent = on ? m.content.toFixed(2) : '—';
+    roSub.textContent = on ? m.sub : '—';
+    roKeep.textContent = on && state.lock === 1 && m.keep ? m.keep.map(c => (c >= 0 ? '+' : '−') + Math.abs(c).toFixed(0)).join(' / ') + ' ct' : '—';
+    roVo.textContent = m.voices + (state.mode === 1 ? '/4' : '');
+    const pc = v => (v * 100).toFixed(v < 0.1 ? 1 : 0) + '%';
+    roCpu.textContent = m.idle ? pc(m.load) + ' · IDLE' : pc(m.load) + (m.peak >= 0 ? ' · PEAK ' + pc(m.peak) : '');
+    roCpu.className = m.load > 0.5 || m.peak > 0.8 ? 'warn' : '';
+  }
+
+  const spec = document.getElementById('spec'), axis = document.getElementById('axis');
+  const sx = spec.getContext('2d'), ax = axis.getContext('2d');
+  let fbuf = null, col = null;
+  // colour map: black → deep green → bytebent green → white
+  const STOPS = [[0, 6, 6, 8], [0.35, 22, 60, 18], [0.7, 79, 174, 54], [1, 240, 255, 232]];
+  const LUT = new Uint8ClampedArray(256 * 3);
+  for (let i = 0; i < 256; i++) {
+    const t = i / 255; let a = STOPS[0], b = STOPS[STOPS.length - 1];
+    for (let s = 0; s < STOPS.length - 1; s++) if (t >= STOPS[s][0] && t <= STOPS[s + 1][0]) { a = STOPS[s]; b = STOPS[s + 1]; break; }
+    const u = (t - a[0]) / Math.max(1e-6, b[0] - a[0]);
+    for (let c = 0; c < 3; c++) LUT[i * 3 + c] = a[c + 1] + (b[c + 1] - a[c + 1]) * u;
+  }
+  function fitCanvases() {
+    const r = spec.getBoundingClientRect(), d = window.devicePixelRatio || 1;
+    const w = Math.round(r.width * d), h = Math.round(r.height * d);
+    if (spec.width !== w || spec.height !== h) {
+      spec.width = w; spec.height = h; axis.width = w; axis.height = h;
+      sx.fillStyle = '#060608'; sx.fillRect(0, 0, w, h);
+      col = sx.createImageData(1, h);
+      ax.clearRect(0, 0, w, h);
+      ax.font = (9 * d) + 'px Monaco, monospace'; ax.textAlign = 'right';
+      for (const f of [5000, 10000, 15000, 20000]) {
+        const y = h - f / 20000 * (h - 2) - 1;
+        ax.fillStyle = 'rgba(169,224,143,.18)'; ax.fillRect(0, Math.round(y), w, 1);
+        ax.fillStyle = 'rgba(169,224,143,.7)'; ax.fillText((f / 1000) + 'k', w - 4 * d, Math.max(10 * d, y - 3 * d));
+      }
+    }
+    return d;
+  }
+  function drawSpec(stepPx) {
+    const d = fitCanvases(), W = spec.width, H = spec.height;
+    const step = Math.max(1, Math.round(stepPx * d));
+    sx.drawImage(spec, -step, 0);
+    if (!analyser) { sx.fillStyle = '#060608'; sx.fillRect(W - step, 0, step, H); return; }
+    if (!fbuf) fbuf = new Float32Array(analyser.frequencyBinCount);
+    analyser.getFloatFrequencyData(fbuf);
+    const binHz = ctx.sampleRate / analyser.fftSize, lo = analyser.minDecibels, hi = analyser.maxDecibels;
+    const data = col.data;
+    for (let y = 0; y < H; y++) {
+      const fTop = (H - y) / H * 20000, fBot = (H - y - 1) / H * 20000;
+      let b0 = Math.floor(fBot / binHz), b1 = Math.max(b0 + 1, Math.ceil(fTop / binHz)), m = -200;
+      for (let b = b0; b < b1 && b < fbuf.length; b++) if (fbuf[b] > m) m = fbuf[b];
+      const t = Math.min(1, Math.max(0, (m - lo) / (hi - lo)));
+      const li = Math.round(Math.pow(t, 1.1) * 255) * 3;
+      const o = y * 4; data[o] = LUT[li]; data[o + 1] = LUT[li + 1]; data[o + 2] = LUT[li + 2]; data[o + 3] = 255;
+    }
+    for (let s = 0; s < step; s++) sx.putImageData(col, W - step + s, 0);
+  }
+  const slow = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let last = 0;
+  function frame(t) {
+    if (!slow || t - last > 250) {
+      // 3 s across the canvas width
+      const dt = last ? Math.min(0.1, (t - last) / 1000) : 1 / 60; last = t;
+      const pxPerSec = spec.getBoundingClientRect().width / 3;
+      drawSpec(Math.max(1, pxPerSec * dt));
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

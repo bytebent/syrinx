@@ -9,14 +9,21 @@ Syrinx makes the sound. Its partner, [beak-tube](https://github.com/bytebent/bea
 separate effect that shapes any audio like a bird's trachea, throat and beak. They work alone or
 together, the way Throat and mouth-tube do.
 
-Status: **prototype, batch 07 of 11**. The reference engine has every parameter of the design:
+Status: **prototype, batch 08 of 11**. The reference engine has every parameter of the design:
 the sources (Duplex, Single, Triple), the play modes, coupling, breath gating, Wobble, the pattern
 engine, the internal trachea with Jumps and Chaos, the Filter, Size, and the musical Lock with its
-pitch keeper. The bench comes next; then the C++ port and the JUCE plugin.
+pitch keeper. The browser bench plays it. Next: the listening round on the bench, then the C++
+port and the JUCE plugin.
 
 ## Try it
 
-Needs Node 18 or newer. No packages to install.
+Open `tools/syrinx.html` in a current browser and press **Power on**. Play with the computer
+keyboard (A to ; for notes, Z/X octave, C/V velocity) or click the keys. The bench has every
+control, the test presets (Load and play runs each one's phrase, sweep and switch), a pitch-bend
+slider, a readout of each source's pitch and level, and a DSP meter. Rebuild it after changing the
+engine: `node tools/bench/build.js`.
+
+Needs Node 18 or newer for the rest. No packages to install.
 
 ```sh
 node tests/engine-test.js        # engine tests
@@ -52,9 +59,9 @@ The design is shared with beak-tube in the doc *Syrinx and beak-tube: design and
 - `reference/presets.js`: test presets (renders and tests only)
 - `tests/engine-test.js`: engine tests
 - `tools/make-maps.js`, `tools/render-presets.js`, `tools/perf.js`: map generator, preset renders, benchmark
+- `tools/bench/`: bench template, AudioWorklet wrapper and build script → `tools/syrinx.html`
 
-Later (see `plan.md`): `source/` (C++ port and JUCE instrument), `ui/`, `tools/bench/`
-(`syrinx.html`), `packaging/`, CI.
+Later (see `plan.md`): `source/` (C++ port and JUCE instrument), `ui/`, `packaging/`, CI.
 
 ## License note
 
