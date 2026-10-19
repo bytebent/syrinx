@@ -15,6 +15,11 @@ const SCENARIOS = [
   ['1 voice, rich low (Regime 1, 523 Hz)', { regime: 1, link: 0, transpose: 12 }, [60]],
   ['1 voice, worst case (2.5 kHz, Regime 0.4, Pressure 0)', { regime: 0.4, link: 0, pressure: 0, detune: 30 }, [63]],
   ['1 voice, worst case + Grain 1', { regime: 0.4, link: 0, pressure: 0, detune: 30, grain: 1 }, [63]],
+  ['1 voice, two sides (Interval, Coupling 0.3)', { playmode: 1, coupling: 0.3 }, [60]],
+  ['1 voice, two sides at the worst case', { playmode: 1, interval: 0.3, regime: 0.4, link: 0, pressure: 0, detune: 30 }, [63]],
+  ['1 voice, Triple (membrane)', { topology: 2, coupling: 0.5 }, [60]],
+  ['1 voice, Single (two folds)', { topology: 1 }, [60]],
+  ['1 voice, pattern 18/s + Wobble', { pattern: 1, sylrate: 18, wobblerate: 170, wobble: 0.5 }, [60]],
   ['4 voices, defaults', { mode: 1 }, chord],
   ['4 voices, worst case', { mode: 1, regime: 0.4, link: 0, pressure: 0, grain: 1 }, [63, 63.0001, 64, 62].map(Math.round)],
 ];

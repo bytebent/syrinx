@@ -88,8 +88,12 @@ The output is x with its DC removed (the airflow the labia let through).
 
 - **Duplex** (default): two independent sides, Left and Right, as in songbirds. Each has its own
   γ, tension and gate.
-- **Single:** one source of two folds, as in pigeons, doves and parrots. Asymmetry detunes the
-  folds so they stop locking, which gives the roughness and sidebands seen in spot-winged pigeons.
+- **Single:** one source of two folds, as in pigeons, doves and parrots. The folds are tied
+  through their velocities (dissipative coupling, which favours moving together and vanishes when
+  they do), so they sound as one tone. Asymmetry detunes them around the note, with the square of
+  the knob up to 3 semitones: in tune at small values, slipping into the roughness and sidebands
+  of spot-winged pigeons from about 0.5 (tonal) to 0.7 (rich). [Decided, batch 04: position
+  coupling made the folds lock in anti-phase and cancel]
 - **Triple:** as in the tracheophone suboscines (Garcia et al. 2017). The two sides move together
   as one labial source, and a tracheal membrane is a second, lower oscillator with a pulse-like
   wave (a strongly nonlinear van der Pol oscillator). Each one's driving pressure is nudged by the
@@ -97,7 +101,9 @@ The output is x with its DC removed (the airflow the labia let through).
   pulses (up to 650 Hz in the rufous ovenbird); close in pitch, the two lock into a louder tone
   between them. Rising pressure can carry a note from pulsing to locking. Membrane sets its pitch
   from the note, Membrane level its pressure (0 stops it). Garcia et al.'s model code is at
-  github.com/gabomindlin/tracheophones.
+  github.com/gabomindlin/tracheophones. The membrane here is z'' = 3(μ − z²)z' − z, its frequency
+  table built at load; the labia's drive is nudged by the membrane's position, the membrane's μ
+  by the labia's (as Garcia et al.'s μ1 − 0.25·x2 and μ2 + 0.1·x1).
 
 **Play modes** (Duplex)
 
@@ -108,7 +114,8 @@ The output is x with its DC removed (the airflow the labia let through).
 | Duo | The two lowest held notes go to left and right | Two independent lines |
 | Independent | MIDI channel 1 to the left side, channel 2 to the right | Sequencing two voices |
 
-In Single and Triple the play modes do not apply: a key sets the source's pitch.
+In Single and Triple the play modes do not apply: a key sets the source's pitch. Duo and
+Independent play one voice with a note per side; Poly applies to Handoff and Interval.
 
 Split defaults to 3.5 kHz (cardinal; scaled by Size). Interval defaults to +7.3 semitones, a
 deliberately non-harmonic offset. **Asymmetry** makes the sides differ in tension offset, Regime
@@ -127,6 +134,12 @@ reflection. Even with no reflection the sides interact:
 
 Which locking wins comes out of the dynamics; there is no Phase control. [Decided]
 
+In the engine each source's drive gets Coupling × (its drive + 0.002) × the other sources'
+normalized positions, taken from the previous sample. Measured (batch 04): Coupling 0.1 locks
+tonal sides up to about 50 cents apart; rich sides resist more. Identical tonal sides lock in
+anti-phase at weak coupling (the sum's period halves) and in phase from about 0.3. Strong
+coupling pulls both pitches off their notes (Lock's pitch keeper, batch 07, holds them).
+
 ## 5. Breath, gating and patterns
 
 - **Breath.** Pressure sets how far past the onset threshold the sources are driven. The ADSR
@@ -136,7 +149,10 @@ Which locking wins comes out of the dynamics; there is no Phase control. [Decide
   breath in faster trills, so Minibreath fades out above about 30 per second.
 - **Gating.** Each side can be shut while pressure stays up (dorsal syringeal muscles), by moving
   that source back across its threshold. Several syllables can come from one breath. Gating is
-  sample-accurate, so it can pulse.
+  sample-accurate, so it can pulse. In the engine a closed side's drive goes past onset and its
+  output is muted; between syllables the output is muted while the source keeps going, unless
+  Minibreath drops the drive too, which stops the source so the next syllable starts physically.
+  Gates take at most 1.5 ms, less for short syllables.
 - **Wobble.** Superfast syringeal muscles modulate airflow up to about 250 Hz; the kiskadee's
   songs carry 160–190 Hz amplitude modulation from them. Wobble is a per-side modulator, 0–250 Hz,
   with Amount and a mix between amplitude and pitch modulation.

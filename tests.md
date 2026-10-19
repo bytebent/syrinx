@@ -3,7 +3,7 @@
 Quick results per batch: tests, experiments and pictures. Pictures live in `docs/tests/`. Run the
 tests with `node tests/engine-test.js`.
 
-**Now: 17 engine tests passing** (about 3 s). Benchmark: `node tools/perf.js`.
+**Now: 33 engine tests passing** (about 8 s). Benchmark: `node tools/perf.js`.
 
 ## Batch 02 · source core
 
@@ -60,7 +60,7 @@ After widening Pressure (Buzz, Link, Pressure swell):
   semi-implicit Euler can't hold pitch at any practical step. Kept RK4.
 - RK4 step vs worst pitch error over the map: 0.1 → 0.10 cent, 0.125 → 0.26, 0.15 → 0.57,
   0.2 → 1.9. Kept 0.1 (larger saves little).
-- `tools/perf.js` (one 2.1 GHz Xeon core, 48 kHz):
+- `tools/perf.js` (one 2.1 GHz Xeon core, 48 kHz; batch 05 adds rows below):
 
   | Scenario | CPU |
   |---|---|
@@ -77,3 +77,56 @@ After widening Pressure (Buzz, Link, Pressure swell):
   16.6%; JS = 11.4, 11.0, 17.8, 48.5%. Decided: all sources of a voice share one loop.
 - Inlining RK4 by hand in JS: about 5% faster (V8 already inlined it). Kept.
 - Decided: Poly has 4 voices.
+
+## Batches 04–05 · sources, play modes, coupling, breath, patterns
+
+Experiments:
+
+- Locking: tonal sides 10 cents apart lock at Coupling 0.05; 50 cents apart at 0.1. Rich sides
+  resist (50 cents still free at 0.7).
+- Identical tonal sides lock in anti-phase at weak coupling (correlation −0.93) and in phase from
+  about 0.3: the review's zebra-finch "period doubling" emerges.
+- Strong coupling pulls both pitches off their notes (Coupling 1: a pair 7.3 semitones apart
+  locks together at 694 Hz).
+- Triple: a membrane 2–5 semitones below locks with the labia into one tone between them, lower
+  than the labia alone (as in the ovenbird); far below, it rides under the labial tone.
+- Single, first try: position coupling made identical folds lock in anti-phase and cancel
+  (near silence). Velocity (dissipative) coupling fixed it: folds move together.
+- Single detuning: linear Asymmetry pulled the locked pitch up to 57 cents sharp at the default;
+  squared Asymmetry keeps the default within 2–18 cents; folds slip into roughness from about
+  0.5 (tonal) to 0.7 (rich).
+- Cost: running sides one after the other doubled the worst case (22%); one interleaved loop
+  brought it to 13.5% (one side 10.7%).
+
+Tests (new):
+
+- Handoff: low note left, high note right; a 2 → 7 kHz sweep starts left and ends right. ✓
+- Interval 730.00 cents; Duo and Independent put the notes on the right sides. ✓
+- Coupling locks sides 10 cents apart; difference tone −164 dB → −24 dB with Coupling 0.3. ✓
+- Identical tonal sides: anti-phase when weak, in phase when strong. ✓
+- Single: folds lock at Asymmetry 0.2, slip at 0.6. ✓
+- Triple: close membrane locks below the labial pitch; far membrane keeps its own; level 0
+  silences it. ✓
+- Pattern: onsets exact (0 samples error at 4×); same output at buffer sizes 1, 64, 1000 with
+  jitter; Sync snaps to beat divisions. ✓
+- Gating: silent between syllables while the source runs; Minibreath stops the source between
+  slow syllables and fades out above 30 per second. ✓
+- Trill limit: a 20/s trill's sweep is cut to Podos's 5070 Hz. ✓
+- Alternate switches sides each syllable. ✓
+- Wobble: −9.5 dB sidebands at ±160 Hz (amplitude); pitch centre within 1.5 cents (pitch). ✓
+
+Problems found and fixed:
+
+- Each syllable started with a short streak: pitch ramped from the last syllable's end. A
+  syllable that starts inside a block now starts at its own first pitch.
+- Single folds cancelled (see above).
+
+Sources at work: each side's level in a cardinal sweep, Triple locking, Single slipping:
+
+![sources](docs/tests/04-sources.png)
+
+New presets 08–16:
+
+![presets 08–16](docs/tests/05-presets.png)
+
+**You:** listen to presets 08–16.

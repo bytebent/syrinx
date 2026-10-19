@@ -1,26 +1,32 @@
 /*
- * Syrinx engine v0.1 · bytebent
+ * Syrinx engine v0.2 · bytebent
  *
- * A bird voice. Each voice is a syrinx source: the normal form of the Mindlin group's labial
- * model (Sitt et al. 2010; Perl et al. 2011), a two-variable nonlinear oscillator
+ * A bird voice. Each voice is a syrinx with one, two or three sound sources. A labial source is
+ * the normal form of the Mindlin group's model (Sitt et al. 2010; Perl et al. 2011), a
+ * two-variable nonlinear oscillator
  *     x' = y,   y' = γ²·α + γ²·β·x + γ²·x² − γ·x·y − γ²·x³ − γ·x²·y
  * where α is pressure (more negative = more drive), β is labial tension and γ a time scale.
  *   - γ only rescales time, so the pitch is exactly γ times the oscillator's frequency at γ = 1.
  *     A map of that frequency over (Regime, drive), made by tools/make-maps.js, lets every block
  *     set γ so the note comes out in tune whatever the timbre.
- *   - Regime moves along a path from the Hopf side (born as a pure tone, harmonics grow with
- *     drive) to the SNILC side (born pulse-like and rich, purer with more drive).
- *   - Link makes Regime follow the note: low notes rich, high notes tonal, as in zebra finch song.
- *   - Pressure and the envelope set the drive past onset; Grain is noise on tension; Breath bend
- *     lets pressure bend pitch.
+ *   - Regime moves along a path from the Hopf side (born as a pure tone) to the SNILC side (born
+ *     pulse-like and rich). Link makes Regime follow the note, as in zebra finch song.
+ *   - Topology: Duplex (left and right sides, as in songbirds), Single (one source of two folds,
+ *     as in doves and parrots), Triple (labia plus a tracheal membrane, a van der Pol oscillator,
+ *     as in the tracheophones; Garcia et al. 2017).
+ *   - Coupling: the sources meet in a shared pressure at the base of the trachea (Laje & Mindlin
+ *     2005); each source's position nudges the drive of the others.
+ *   - Breath and gates: the envelope shapes pressure; pattern syllables gate the sources with
+ *     sample accuracy; minibreaths drop the drive between slow syllables; Wobble is superfast
+ *     muscle modulation, up to 250 Hz.
  *
- * Batch 02: one source per voice. Sides, patterns, coupling, the internal trachea and Lock come
- * in later batches (see plan.md).
+ * Batches 02–05 (see plan.md). The internal trachea with Jumps and Chaos, the Filter, Lock and
+ * Size come later.
  *
- * The oscillator is integrated with RK4 at 4x the host rate, with enough sub-steps to keep the
- * step at or below 0.1 time units (pitch error under 0.03 cent), in fixed 32-sample blocks, and
- * decimated with a windowed-sinc FIR, as in Throat and Dolphin. process() never allocates.
- * Same seed, same notes: same output, at any host buffer size.
+ * All sources of a voice are integrated together, RK4 at 4x the host rate, with a shared number
+ * of sub-steps that keeps every step at or below 0.1 time units (pitch error under 0.1 cent), in
+ * fixed 32-sample blocks, then decimated with a windowed-sinc FIR, as in Throat and Dolphin.
+ * process() never allocates. Same seed, same notes: same output, at any host buffer size.
  *
  * Works in an AudioWorklet and in Node (module.exports) for offline tests.
  */
@@ -120,28 +126,93 @@
     return D_MAX * hi * hi;
   }
 
+  /* ---------- the tracheal membrane (Triple) ---------- */
+  // A van der Pol oscillator, z'' = ε(μ − z²)z' − z, after Garcia et al. 2017: pulse-like and low.
+  // μ is its driving pressure (amplitude about 2√μ); its frequency at time scale 1 depends on εμ.
+  const VDP_EPS = 3;
+  const VDP_MU = [];                       // table of frequency against μ, built once
+  (function buildVdp() {
+    for (let i = 0; i <= 32; i++) {
+      const mu = 0.02 + 0.98 * i / 32, h = 0.01;
+      let z = 0.1, v = 0;
+      const acc = (z, v) => VDP_EPS * (mu - z * z) * v - z;
+      const step = () => {
+        const k1z = v, k1v = acc(z, v);
+        const k2z = v + 0.5 * h * k1v, k2v = acc(z + 0.5 * h * k1z, v + 0.5 * h * k1v);
+        const k3z = v + 0.5 * h * k2v, k3v = acc(z + 0.5 * h * k2z, v + 0.5 * h * k2v);
+        const k4z = v + h * k3v, k4v = acc(z + h * k3z, v + h * k3v);
+        z += h / 6 * (k1z + 2 * k2z + 2 * k3z + k4z); v += h / 6 * (k1v + 2 * k2v + 2 * k3v + k4v);
+      };
+      for (let t = 0; t < 200; t += h) step();
+      let prev = z, cross = [], n = 0;
+      while (cross.length < 11) { step(); n++; if (prev < 0 && z >= 0) cross.push(n - 1 + -prev / (z - prev)); prev = z; }
+      VDP_MU.push(10 / ((cross[10] - cross[0]) * h));
+    }
+  })();
+  function vdpFreq(mu) {
+    const t = clamp((mu - 0.02) / 0.98 * 32, 0, 32), i = Math.min(31, Math.floor(t)), f = t - i;
+    return VDP_MU[i] + (VDP_MU[i + 1] - VDP_MU[i]) * f;
+  }
+
   // ids, defaults and ranges: the one table the C++ core and the UI copy.
   // log: the knob moves logarithmically; curve: knob position^curve; step: whole steps.
-  // Batch 02 has the source controls; the rest of design.md §9 arrives batch by batch.
+  // Batches 02–05; the rest of design.md §9 arrives batch by batch.
   const PARAMS = [
-    { id: 'regime', def: 0.3, min: 0, max: 1 },          // Hopf (tonal) → SNILC (pulse-like)
-    { id: 'link', def: 0.7, min: 0, max: 1 },            // how much Regime follows the note
-    { id: 'grain', def: 0.15, min: 0, max: 1 },          // noise on tension
-    { id: 'breathbend', def: 0, min: 0, max: 1 },        // octaves of pitch from pressure
-    { id: 'pressure', def: 0.7, min: 0, max: 1 },        // drive past onset
+    // source
+    { id: 'topology', def: 0, min: 0, max: 2, step: 1 },     // Duplex, Single, Triple
+    { id: 'membrane', def: -24, min: -48, max: 12 },         // semitones from the note (Triple)
+    { id: 'memlevel', def: 0.5, min: 0, max: 1 },            // membrane pressure (Triple)
+    { id: 'regime', def: 0.3, min: 0, max: 1 },              // Hopf (tonal) → SNILC (pulse-like)
+    { id: 'link', def: 0.7, min: 0, max: 1 },                // how much Regime follows the note
+    { id: 'grain', def: 0.15, min: 0, max: 1 },              // noise on tension
+    { id: 'breathbend', def: 0, min: 0, max: 1 },            // octaves of pitch from pressure
+    // sides
+    { id: 'playmode', def: 0, min: 0, max: 3, step: 1 },     // Handoff, Interval, Duo, Independent
+    { id: 'split', def: 3500, min: 500, max: 8000, log: true },  // Hz, handoff point
+    { id: 'overlap', def: 300, min: 0, max: 1500 },          // Hz, crossover band
+    { id: 'interval', def: 7.3, min: -24, max: 24 },         // semitones, right side in Interval mode
+    { id: 'asym', def: 0.2, min: 0, max: 1 },                // how much the sides (or folds) differ
+    { id: 'balance', def: 0, min: -1, max: 1 },              // left–right level
+    { id: 'coupling', def: 0.1, min: 0, max: 1 },            // pull between sources through the shared tube
+    // muscles
+    { id: 'wobblerate', def: 0, min: 0, max: 250 },          // Hz
+    { id: 'wobble', def: 0, min: 0, max: 1 },
+    { id: 'wobblefm', def: 0, min: 0, max: 1 },              // 0 amplitude, 1 pitch
+    // breath
+    { id: 'pressure', def: 0.7, min: 0, max: 1 },            // drive past onset
     { id: 'attack', def: 0.008, min: 0.001, max: 5, curve: 3 },
     { id: 'decay', def: 0.3, min: 0.001, max: 5, curve: 3 },
     { id: 'sustain', def: 0.8, min: 0, max: 1 },
     { id: 'release', def: 0.03, min: 0.001, max: 8, curve: 3 },
+    { id: 'minibreath', def: 0.6, min: 0, max: 1 },          // drive dip between slow syllables
+    // pattern
+    { id: 'pattern', def: 0, min: 0, max: 1, step: 1 },
+    { id: 'sylrate', def: 8, min: 0.5, max: 60, log: true }, // syllables per second
+    { id: 'sync', def: 0, min: 0, max: 1, step: 1 },
+    { id: 'duty', def: 0.6, min: 0.05, max: 0.95 },
+    { id: 'shape', def: 2, min: 0, max: 5, step: 1 },        // Flat, Up, Down, Convex, Concave, Wave
+    { id: 'sweep', def: 1, min: -4, max: 4 },                // octaves
+    { id: 'sides', def: 0, min: 0, max: 3, step: 1 },        // Auto, Left, Right, Alternate
+    { id: 'trill', def: 0.7, min: 0, max: 1 },               // trill limit (Podos 1997)
+    { id: 'jitter', def: 0.05, min: 0, max: 1 },
+    // pitch and output
     { id: 'transpose', def: 36, min: -24, max: 60, step: 1 },  // semitones; middle C plays about 2.1 kHz
-    { id: 'detune', def: 0, min: -100, max: 100 },       // cents
-    { id: 'glide', def: 0.02, min: 0, max: 2, curve: 3 },// s, mono only
+    { id: 'detune', def: 0, min: -100, max: 100 },           // cents
+    { id: 'glide', def: 0.02, min: 0, max: 2, curve: 3 },    // s, mono only
     { id: 'bendrange', def: 12, min: 2, max: 48, step: 1 },
-    { id: 'mode', def: 0, min: 0, max: 1, step: 1 },     // 0 mono, 1 poly
-    { id: 'volume', def: -6, min: -48, max: 6 },         // dB
+    { id: 'mode', def: 0, min: 0, max: 1, step: 1 },         // 0 mono, 1 poly (4 voices)
+    { id: 'volume', def: -6, min: -48, max: 6 },             // dB
   ];
   const PINDEX = {};
   PARAMS.forEach((p, i) => { PINDEX[p.id] = i; });
+
+  const SYL_DIVS = [0.25, 0.5, 1, 1.5, 2, 3, 4, 6, 8, 12, 16, 24, 32];   // syllables per beat (Sync)
+  const COUPLE_DC = 0.002;                 // coupling acts on drive + this, so tonal sources feel it too
+  const MEM_LEVEL = 0.6;                   // membrane output against the labia
+  const WOBBLE_CENTS = 200;                // pitch depth of Wobble at full
+  const GATE_MS = 1.5;                     // side and syllable gate time, at most
+  const SINGLE_PULL = 0.05;                 // Single: fold pull at Coupling 0 is 0.3 × this
+  const SINGLE_CENTS = 300;                // Single: fold detuning at full Asymmetry (they stop locking past about 1 semitone)
 
   function toNorm(d, v) {
     if (d.log) return Math.log(v / d.min) / Math.log(d.max / d.min);
@@ -155,6 +226,21 @@
     return v;
   }
   function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+  // syllable pitch shapes, u in [0, 1] → offset in units of Sweep (as Dolphin's whistle)
+  function shapeAt(shape, u) {
+    switch (shape) {
+      case 1: return 1 - (1 - u) * (1 - u);              // Up
+      case 2: return -(1 - (1 - u) * (1 - u));           // Down
+      case 3: return Math.sin(Math.PI * u);              // Convex
+      case 4: return -Math.sin(Math.PI * u);             // Concave
+      case 5: return Math.sin(3 * Math.PI * u);          // Wave
+      default: return 0;                                  // Flat
+    }
+  }
+  const SHAPE_RANGE = [[0, 0], [0, 1], [-1, 0], [0, 1], [-1, 0], [-1, 1]];
+  // Podos 1997, pooled upper bound: frequency bandwidth (Hz) a trill of this rate can cover
+  function podosBandwidth(rate) { return Math.max(200, (7.55 - 0.124 * rate) * 1000); }
 
   function makeFir() {
     const h = new Float32Array(FIR_LEN);
@@ -171,25 +257,40 @@
     return h;
   }
 
-  /* ---------- one voice ---------- */
+  /* ---------- one voice: up to three sources (0 left, 1 right, 2 membrane) ---------- */
   class Voice {
     constructor(e, seed) {
       this.e = e;
       this.seed = (seed >>> 0) || 1;
-      this.s = new Float64Array(2);
+      // per source, struct of arrays
+      this.x = new Float64Array(3); this.y = new Float64Array(3);
+      this.a0 = new Float64Array(3); this.b0 = new Float64Array(3); this.g0 = new Float64Array(3);
+      this.gain0 = new Float64Array(3); this.mean0 = new Float64Array(3); this.rms0 = new Float64Array(3);
+      this.d0 = new Float64Array(3); this.slope = new Float64Array(3);
+      this.gs = new Float64Array(3);       // side gate, smoothed (0 closed, 1 open)
+      this.w = new Float64Array(3);        // side gate target for this block
+      this.on = new Uint8Array(3);         // integrated this block
+      this.noise = new Float64Array(3);
+      this.prevN = new Float64Array(3);    // last normalized output, for coupling
       this.q = { f: 0, rms: 1, mean: 0, sci: 1 };
+      this.logF = new Float64Array(2); this.glideLeft = new Int32Array(2); this.glideStep = new Float64Array(2);
+      this.sideNote = new Int32Array(2); this.sideHeld = new Uint8Array(2);
+      this.patGate = new Float32Array(BLOCK * OS);
+      this.fNow = new Float64Array(3); this.subNow = 0; this.regimeNow = 0; this.driveNow = 0; this.sciNow = 1; this.gammaNow = 0;
       this.reset();
     }
     reset() {
       this.rng = this.seed;
       this.stage = 0; this.env = 0; this.note = -1; this.held = false; this.vel = 1; this.age = 0;
-      this.logF = Math.log2(440); this.glideLeft = 0; this.glideStep = 0;
-      this.s[0] = 0; this.s[1] = 0;
-      this.noise = 0;
-      // block-to-block ramps
-      this.a0 = 0; this.b0 = 0; this.g0 = 0; this.gain0 = 0; this.mean0 = 0; this.fresh = true;
-      // what the bench and tests read
-      this.fNow = 0; this.regimeNow = 0; this.driveNow = 0; this.sciNow = 1; this.gammaNow = 0; this.subNow = 0;
+      this.logF.fill(Math.log2(440)); this.glideLeft.fill(0); this.glideStep.fill(0);
+      this.sideNote.fill(-1); this.sideHeld.fill(0);
+      this.x.fill(0); this.y.fill(0); this.gs.fill(0); this.w.fill(0); this.on.fill(0);
+      this.noise.fill(0); this.prevN.fill(0); this.fresh = true;
+      this.gp = 0;                          // pattern gate, smoothed
+      this.wobPh = 0;
+      // pattern state
+      this.pPhase = 0; this.sylRate = 8; this.sylPitch = 0; this.sylSweep = 0; this.sylSide = 1; this.sylCount = 0;
+      this.contour0 = 0;
     }
     rand() {
       let x = this.rng;
@@ -204,26 +305,77 @@
       const e = this.e;
       return Math.log2(440) + (note - 69 + e.p[PINDEX.transpose] + e.p[PINDEX.detune] / 100) / 12;
     }
-    setTarget(note, glide) {
+    // side −1: both sides follow the note; 0 or 1: that side only (Duo, Independent)
+    setTarget(note, glide, side) {
       const t = this.pitchTarget(note);
       const g = this.e.p[PINDEX.glide];
-      if (glide && g > 0.0015) {
-        const steps = Math.max(1, Math.round(g * this.e.sr / BLOCK));
-        this.glideStep = (t - this.logF) / steps; this.glideLeft = steps;
-      } else { this.logF = t; this.glideLeft = 0; }
-      this.note = note;
+      const sides = side === 0 || side === 1 ? [side] : [0, 1];
+      for (const s of sides) {
+        if (glide && g > 0.0015) {
+          const steps = Math.max(1, Math.round(g * this.e.sr / BLOCK));
+          this.glideStep[s] = (t - this.logF[s]) / steps; this.glideLeft[s] = steps;
+        } else { this.logF[s] = t; this.glideLeft[s] = 0; }
+      }
+      if (!(side === 1)) this.note = note;
     }
     trigger(vel) {
       this.vel = 0.2 + 0.8 * clamp(vel / 127, 0, 1);
       if (this.stage === 0) {
-        // from rest: the labia start at their midpoint with a small push
-        this.env = 0; this.s[0] = 0; this.s[1] = 0.01; this.noise = 0; this.fresh = true;
+        // from rest: the labia start at their midpoint with a small push; the pattern starts a syllable
+        this.env = 0; this.fresh = true;
+        for (let j = 0; j < 3; j++) { this.x[j] = 0; this.y[j] = 0.01; this.gs[j] = 0; this.noise[j] = 0; this.prevN[j] = 0; }
+        this.x[2] = 0.1; this.y[2] = 0;
+        this.gp = 0; this.pPhase = 0; this.wobPh = 0;
+        this.newSyllable(true);
       }
       this.stage = 1; this.held = true; this.age = ++this.e.ageCounter;
     }
     release() { if (this.stage !== 0) { this.stage = 4; this.held = false; } }
 
-    // envelope over one block (Dolphin's shapes: linear attack, exponential decay and release)
+    // syllable rate now: free or synced to tempo
+    baseRate() {
+      const e = this.e, P = e.p;
+      let r = P[PINDEX.sylrate];
+      if (P[PINDEX.sync] >= 0.5) {
+        const bps = e.tempo / 60;
+        let best = SYL_DIVS[0] * bps, bd = Infinity;
+        for (const d of SYL_DIVS) { const q = d * bps, dd = Math.abs(Math.log(q / r)); if (dd < bd) { bd = dd; best = q; } }
+        r = best;
+      }
+      return r;
+    }
+    newSyllable(first) {
+      const e = this.e, P = e.p, jit = P[PINDEX.jitter];
+      const base = this.baseRate();
+      this.sylRate = jit > 0 ? base * clamp(1 + jit * 0.25 * this.gauss(), 0.5, 1.5) : base;
+      this.sylPitch = jit > 0 ? jit * (0.5 / 12) * this.gauss() : 0;
+      if (!first) this.sylSide = 1 - this.sylSide; else this.sylSide = 0;
+      // trill limit: shrink the sweep until the syllable's bandwidth is under Podos's line
+      let sw = P[PINDEX.sweep];
+      const trill = P[PINDEX.trill], shape = Math.round(P[PINDEX.shape]);
+      if (trill > 0 && sw !== 0 && shape !== 0) {
+        const f = Math.pow(2, this.logF[0]), [lo, hi] = SHAPE_RANGE[shape];
+        const bwMax = podosBandwidth(this.sylRate) / trill;
+        const bw = (s) => f * (Math.pow(2, Math.max(s * lo, s * hi)) - Math.pow(2, Math.min(s * lo, s * hi)));
+        if (bw(sw) > bwMax) {
+          let a = 0, b = Math.abs(sw);
+          for (let i = 0; i < 30; i++) { const m = 0.5 * (a + b); if (bw(Math.sign(sw) * m) > bwMax) b = m; else a = m; }
+          sw = Math.sign(sw) * a;
+        }
+      }
+      this.sylSweep = sw;
+      this.sylCount++;
+      if (e.onsets) e.onsets.push(e.osTime);
+    }
+    // contour offset (octaves) at the current pattern phase
+    contour() {
+      const P = this.e.p;
+      if (P[PINDEX.pattern] < 0.5) return 0;
+      const duty = P[PINDEX.duty];
+      const u = Math.min(1, this.pPhase / duty);
+      return this.sylPitch + this.sylSweep * shapeAt(Math.round(P[PINDEX.shape]), u);
+    }
+
     stepEnv(nOS) {
       const e = this.e, P = e.p, srOS = e.srOS;
       const attStep = 1 / Math.max(1, P[PINDEX.attack] * srOS);
@@ -242,69 +394,258 @@
       return true;
     }
 
-    render(nOS, out) {
+    // per-source block setup for a labial source; returns false if the source is silent
+    setupLabial(j, logHz, regBase, E, gamma, out) {
       const e = this.e, P = e.p;
-      if (this.glideLeft > 0) { this.logF += this.glideStep; this.glideLeft--; }
-      if (!this.stepEnv(nOS)) return;
-      const E = this.env;
-      // pitch: note, bend, Breath bend (pressure lifts the pitch up to the note at full envelope)
-      const logHz = this.logF + e.bendOct + P[PINDEX.breathbend] * (E - 1);
       const hz = Math.pow(2, logHz);
-      // Regime, following the note by Link
-      const lr = Math.log2(hz);
-      const rNote = clamp((Math.log2(LINK_HI) - lr) / (Math.log2(LINK_HI) - Math.log2(LINK_LO)), 0, 1);
-      const reg = clamp(P[PINDEX.regime] + P[PINDEX.link] * (rNote - P[PINDEX.regime]), 0, 1);
-      // drive past onset: the Regime path at full pressure, scaled by Pressure and the envelope
+      const rNote = clamp((Math.log2(LINK_HI) - logHz) / (Math.log2(LINK_HI) - Math.log2(LINK_LO)), 0, 1);
+      const reg = clamp(regBase + P[PINDEX.link] * (rNote - regBase), 0, 1);
       const dPath = D_HOPF * Math.pow(D_SNILC / D_HOPF, reg);
       let d = clamp(dPath * Math.pow(2, PRESS_OCT * (P[PINDEX.pressure] - 0.7)) * (0.3 + 0.7 * E), D_MIN, D_MAX);
       d = driveForContent(reg, d, Math.max(1.02, CONTENT_HZ / hz));
       const b = BETA_LO + (BETA_HI - BETA_LO) * reg;
-      const a = alphaOn(b) - d;
-      // Grain moves tension along the onset line, so the drive past onset stays the same
-      const onSlope = (alphaOn(b + 1e-4) - alphaOn(b - 1e-4)) / 2e-4;
       const q = lookup(reg, d, this.q);
-      const gamma = hz / q.f;
-      const gain = this.vel * E * LEVEL / Math.pow(q.rms, NORM_POW);
-      if (this.fresh) { this.a0 = a; this.b0 = b; this.g0 = gamma; this.gain0 = 0; this.mean0 = q.mean; this.fresh = false; }
-      // sub-steps: keep every RK4 step at or below H_MAX
-      const gmax = Math.max(gamma, this.g0);
-      const sub = Math.min(MAX_SUB, Math.max(1, Math.ceil(gmax / (e.srOS * H_MAX))));
+      out.hz = hz; out.reg = reg; out.d = d; out.b = b; out.a = alphaOn(b) - d;
+      out.slope = (alphaOn(b + 1e-4) - alphaOn(b - 1e-4)) / 2e-4;
+      out.gamma = hz / q.f; out.mean = q.mean; out.rms = q.rms; out.sci = q.sci;
+      out.gain = LEVEL / Math.pow(q.rms, NORM_POW);
+      return out;
+    }
+
+    render(nOS, out) {
+      const e = this.e, P = e.p, srOS = e.srOS;
+      for (let s = 0; s < 2; s++) if (this.glideLeft[s] > 0) { this.logF[s] += this.glideStep[s]; this.glideLeft[s]--; }
+      if (!this.stepEnv(nOS)) return;
+      const E = this.env;
+      const topo = Math.round(P[PINDEX.topology]);
+      const mode = topo === 0 ? Math.round(P[PINDEX.playmode]) : 1;
+      const patOn = P[PINDEX.pattern] >= 0.5;
+
+      // pattern pre-pass: syllable phase and gate for every 4x sample of the block
+      const duty = P[PINDEX.duty], pg = this.patGate;
+      let started = false;
+      if (patOn) {
+        for (let i = 0; i < nOS; i++) {
+          this.pPhase += this.sylRate / srOS;
+          if (this.pPhase >= 1) { this.pPhase -= Math.floor(this.pPhase); e.osTime = e.osTimeBase + i; this.newSyllable(false); started = true; }
+          pg[i] = this.pPhase < duty ? 1 : 0;
+        }
+      } else pg.fill(1, 0, nOS);
+      const contour1 = this.contour();
+      // a syllable that starts inside this block starts at its own first pitch (every shape starts at 0),
+      // not ramped from the last syllable's end; the gate is closed until then
+      this.contour0 = contour1;
+      const rate = patOn ? this.sylRate : 0;
+      const mb = P[PINDEX.minibreath] * clamp((30 - rate) / 5, 0, 1);
+
+      // side pitches (log2 Hz) at block end
+      const common = e.bendOct + P[PINDEX.breathbend] * (E - 1) + contour1;
+      let lL = this.logF[0] + common;
+      let lR;
+      if (topo === 1) {                                                       // Single: the two folds, detuned around the note
+        const as = P[PINDEX.asym], half = 0.5 * as * as * SINGLE_CENTS / 1200;   // squared: small values stay in tune
+        lR = lL + half; lL -= half;
+      }
+      else if (mode === 1) lR = lL + P[PINDEX.interval] / 12;                 // Interval
+      else if (mode >= 2) lR = this.logF[1] + common;                         // Duo, Independent
+      else lR = lL;                                                           // Handoff
+      // side targets
+      const w = this.w;
+      if (topo === 2) { w[0] = 1; w[1] = 0; w[2] = P[PINDEX.memlevel] > 0 ? 1 : 0; }
+      else if (topo === 1) { w[0] = 1; w[1] = 1; w[2] = 0; }
+      else {
+        w[2] = 0;
+        if (mode === 0) {
+          const sides = patOn ? Math.round(P[PINDEX.sides]) : 0;
+          if (sides === 1) { w[0] = 1; w[1] = 0; }
+          else if (sides === 2) { w[0] = 0; w[1] = 1; }
+          else if (sides === 3) { w[0] = this.sylSide === 0 ? 1 : 0; w[1] = 1 - w[0]; }
+          else {
+            const f = Math.pow(2, lL), sp = P[PINDEX.split], ov = P[PINDEX.overlap];
+            const lo = Math.max(50, sp - ov / 2), hi = sp + ov / 2;
+            const t = hi > lo ? clamp((f - lo) / (hi - lo), 0, 1) : (f >= sp ? 1 : 0);
+            w[1] = t * t * (3 - 2 * t); w[0] = 1 - w[1];
+          }
+        } else if (mode === 1) { w[0] = 1; w[1] = 1; }
+        else { w[0] = this.sideHeld[0] ? 1 : 0; w[1] = this.sideHeld[1] ? 1 : 0; }
+      }
+      // balance and asymmetry on levels
+      const bal = P[PINDEX.balance], asym = topo === 0 ? P[PINDEX.asym] : 0;
+      const lvl0 = 1 - Math.max(0, bal), lvl1 = (1 + Math.min(0, bal)) * (1 - 0.3 * asym);
+
+      // block setup per source
+      const wobRate = P[PINDEX.wobblerate], wob = wobRate > 0 ? P[PINDEX.wobble] : 0, wfm = P[PINDEX.wobblefm];
+      const fmMax = Math.pow(2, wob * wfm * WOBBLE_CENTS / 1200);
+      const regBase = P[PINDEX.regime];
+      const S = e.scratch;
+      let sub = 1, any = false;
+      for (let j = 0; j < 2; j++) {
+        const live = w[j] > 0 || this.gs[j] > 1e-4;
+        this.on[j] = live ? 1 : 0;
+        if (!live) continue;
+        any = true;
+        const regJ = j === 1 && topo === 0 ? clamp(regBase + 0.25 * asym, 0, 1) : regBase;
+        const o = this.setupLabial(j, j === 0 ? lL : lR, regJ, E, 0, S[j]);
+        o.gain *= j === 0 ? lvl0 : lvl1;
+        if (topo === 1) o.gain *= 0.6;                                        // two folds sum
+        sub = Math.max(sub, Math.ceil(o.gamma * fmMax / (srOS * H_MAX)));
+      }
+      // membrane
+      const mu = P[PINDEX.memlevel];
+      this.on[2] = topo === 2 && (mu > 0 || this.gs[2] > 1e-4) ? 1 : 0;
+      if (this.on[2]) {
+        const o = S[2];
+        o.hz = Math.pow(2, lL + P[PINDEX.membrane] / 12);
+        o.gamma = o.hz / vdpFreq(Math.max(0.02, mu));
+        o.gain = LEVEL * MEM_LEVEL; o.mean = 0; o.rms = 1; o.a = Math.max(0.02, mu); o.b = 0; o.d = 0; o.slope = 0;
+        sub = Math.max(sub, Math.ceil(o.gamma * fmMax / (srOS * H_MAX)));
+        any = true;
+      }
+      if (!any) return;
+      sub = Math.min(MAX_SUB, sub);
+      if (this.fresh) {
+        for (let j = 0; j < 3; j++) { const o = S[j]; this.a0[j] = o.a; this.b0[j] = o.b; this.g0[j] = o.gamma; this.gain0[j] = 0; this.mean0[j] = o.mean; this.rms0[j] = o.rms; this.d0[j] = o.d; }
+        this.fresh = false;
+      }
+
       // ramps across the block
       const inv = 1 / nOS;
-      const da = (a - this.a0) * inv, db = (b - this.b0) * inv, dg = (gamma - this.g0) * inv;
-      const dgain = (gain - this.gain0) * inv, dmean = (q.mean - this.mean0) * inv;
-      let ca = this.a0, cb = this.b0, cg = this.g0, cgain = this.gain0, cmean = this.mean0;
-      // grain: band-limited Gaussian noise on tension
+      const ca = e.ca, cb = e.cb, cg = e.cg, cgain = e.cgain, cmean = e.cmean, crms = e.crms, cd = e.cd;
+      const da = e.da, db = e.db, dg = e.dg, dgain = e.dgain, dmean = e.dmean, drms = e.drms, dd = e.dd;
+      const vel = this.vel;
+      for (let j = 0; j < 3; j++) {
+        const o = S[j];
+        if (!this.on[j]) { this.gain0[j] = 0; continue; }
+        const gainT = o.gain * vel * E;
+        if (started) { this.a0[j] = o.a; this.b0[j] = o.b; this.g0[j] = o.gamma; this.mean0[j] = o.mean; this.rms0[j] = o.rms; this.d0[j] = o.d; }
+        ca[j] = this.a0[j]; cb[j] = this.b0[j]; cg[j] = this.g0[j]; cgain[j] = this.gain0[j]; cmean[j] = this.mean0[j]; crms[j] = this.rms0[j]; cd[j] = this.d0[j];
+        da[j] = (o.a - ca[j]) * inv; db[j] = (o.b - cb[j]) * inv; dg[j] = (o.gamma - cg[j]) * inv;
+        dgain[j] = (gainT - cgain[j]) * inv; dmean[j] = (o.mean - cmean[j]) * inv; drms[j] = (o.rms - crms[j]) * inv; dd[j] = (o.d - cd[j]) * inv;
+        this.a0[j] = o.a; this.b0[j] = o.b; this.g0[j] = o.gamma; this.gain0[j] = gainT; this.mean0[j] = o.mean; this.rms0[j] = o.rms; this.d0[j] = o.d;
+        this.slope[j] = o.slope;
+        this.fNow[j] = o.hz;
+      }
+
+      // gates: side gates follow w, the pattern gate follows the syllables; times scale with syllables
+      const gateS = Math.min(GATE_MS / 1000, patOn ? 0.25 * duty / this.sylRate : 1);
+      const gc = 1 - Math.exp(-1 / (gateS * srOS));
       const grain = P[PINDEX.grain] * GRAIN_SD;
-      const nc = 1 - Math.exp(-TWO_PI * GRAIN_HZ / e.srOS), nNorm = Math.sqrt((2 - nc) / nc);
-      let noise = this.noise;
-      const s = this.s, invSub = 1 / sub, invSr = 1 / e.srOS;
-      let x = s[0], y = s[1];
+      const nc = 1 - Math.exp(-TWO_PI * GRAIN_HZ / srOS), nNorm = Math.sqrt((2 - nc) / nc);
+      const C = topo === 1 ? 0 : P[PINDEX.coupling];
+      // Single: the two folds of one source are tied through their velocities (dissipative coupling), so they
+      // move together until Asymmetry detunes them too far; in step, the pull vanishes
+      const K = topo === 1 ? SINGLE_PULL * (0.3 + P[PINDEX.coupling]) : 0;
+      const wobInc = wobRate / srOS;
+      const amDepth = wob * (1 - wfm), fmDepth = wob * wfm * WOBBLE_CENTS / 1200 * Math.LN2;
+      const invSub = 1 / sub, invSr = 1 / srOS;
+      const on0 = this.on[0], on1 = this.on[1], on2 = this.on[2];
+      let x0 = this.x[0], y0 = this.y[0], x1 = this.x[1], y1 = this.y[1], z = this.x[2], zv = this.y[2];
+      let gs0 = this.gs[0], gs1 = this.gs[1], gs2 = this.gs[2], gp = this.gp;
+      let n0 = this.noise[0], n1 = this.noise[1];
+      let pn0 = this.prevN[0], pn1 = this.prevN[1], pn2 = this.prevN[2];
+      const w0 = w[0], w1 = w[1], w2 = w[2];
+      let wph = this.wobPh;
+      const tap = e.tap;                    // tests only: per-source normalized output at 4x
       for (let i = 0; i < nOS; i++) {
-        ca += da; cb += db; cg += dg; cgain += dgain; cmean += dmean;
-        let bb = cb, aa = ca;
-        if (grain > 0) { noise += nc * (this.gauss() - noise); const n = grain * nNorm * noise; bb += n; aa += onSlope * n; }
-        const h = cg * invSr * invSub, hh = 0.5 * h, h6 = h / 6;
-        // RK4, written out (same arithmetic as rk4() above, in the same order)
-        for (let k = 0; k < sub; k++) {
-          const k1x = y, k1y = aa + bb * x + x * x - x * y - x * x * x - x * x * y;
-          const x2 = x + hh * k1x, y2 = y + hh * k1y;
-          const k2x = y2, k2y = aa + bb * x2 + x2 * x2 - x2 * y2 - x2 * x2 * x2 - x2 * x2 * y2;
-          const x3 = x + hh * k2x, y3 = y + hh * k2y;
-          const k3x = y3, k3y = aa + bb * x3 + x3 * x3 - x3 * y3 - x3 * x3 * x3 - x3 * x3 * y3;
-          const x4 = x + h * k3x, y4 = y + h * k3y;
-          const k4x = y4, k4y = aa + bb * x4 + x4 * x4 - x4 * y4 - x4 * x4 * x4 - x4 * x4 * y4;
-          x = x + h6 * (k1x + 2 * k2x + 2 * k3x + k4x);
-          y = y + h6 * (k1y + 2 * k2y + 2 * k3y + k4y);
+        gs0 += (w0 - gs0) * gc; gs1 += (w1 - gs1) * gc; gs2 += (w2 - gs2) * gc;
+        gp += (pg[i] - gp) * gc;
+        // superfast muscles
+        let am = 1, fm = 1;
+        if (wob > 0) {
+          wph += wobInc; if (wph >= 1) wph -= 1;
+          const sn = Math.sin(TWO_PI * wph);
+          am = 1 - amDepth * (0.5 - 0.5 * sn);
+          fm = Math.exp(fmDepth * sn);
         }
-        out[i] += (x - cmean) * cgain;
+        // drive factor: a closed side stops; between slow syllables the drive dips (minibreath).
+        // Every coupling term uses the previous sample's values, so no source sees another's new state.
+        const breathOff = mb * (1 - gp);
+        let a0 = 0, b0 = 0, a1 = 0, b1 = 0, muE = 0, h0 = 0, h1 = 0, h2 = 0;
+        if (on0) {
+          ca[0] += da[0]; cb[0] += db[0]; cg[0] += dg[0]; cgain[0] += dgain[0]; cmean[0] += dmean[0]; crms[0] += drms[0]; cd[0] += dd[0];
+          const ge = Math.max(-0.5, 1 - 1.5 * ((1 - gs0) + breathOff * gs0));
+          a0 = ca[0] + cd[0] * (1 - ge); b0 = cb[0];
+          if (grain > 0) { n0 += nc * (this.gauss() - n0); const n = grain * nNorm * n0; b0 += n; a0 += this.slope[0] * n; }
+          // coupling: the other sources' positions nudge this drive (shared pressure)
+          if (C > 0) a0 += C * (cd[0] + COUPLE_DC) * (gs1 * pn1 + (on2 ? gs2 * pn2 : 0));
+          if (K > 0) a0 += K * (y1 - y0);
+          h0 = cg[0] * fm * invSr * invSub;
+        }
+        if (on1) {
+          ca[1] += da[1]; cb[1] += db[1]; cg[1] += dg[1]; cgain[1] += dgain[1]; cmean[1] += dmean[1]; crms[1] += drms[1]; cd[1] += dd[1];
+          const ge = Math.max(-0.5, 1 - 1.5 * ((1 - gs1) + breathOff * gs1));
+          a1 = ca[1] + cd[1] * (1 - ge); b1 = cb[1];
+          if (grain > 0) { n1 += nc * (this.gauss() - n1); const n = grain * nNorm * n1; b1 += n; a1 += this.slope[1] * n; }
+          if (C > 0) a1 += C * (cd[1] + COUPLE_DC) * gs0 * pn0;
+          if (K > 0) a1 += K * (y0 - y1);
+          h1 = cg[1] * fm * invSr * invSub;
+        }
+        if (on2) {
+          cg[2] += dg[2]; cgain[2] += dgain[2];
+          // membrane: its pressure is nudged by the labia (Garcia et al.: μ2 + 0.1·x1)
+          muE = Math.max(0, ca[2] * (1 + C * 0.5 * gs0 * pn0));
+          h2 = cg[2] * fm * invSr * invSub;
+        }
+        // all active sources advance together, one RK4 step each per sub-step (independent chains
+        // in one loop run almost as fast as one: batch 03)
+        const hh0 = 0.5 * h0, h60 = h0 / 6, hh1 = 0.5 * h1, h61 = h1 / 6, hh2 = 0.5 * h2, h62 = h2 / 6;
+        for (let k = 0; k < sub; k++) {
+          if (on0) {
+            const x = x0, y = y0;
+            const k1y = a0 + b0 * x + x * x - x * y - x * x * x - x * x * y;
+            const x2 = x + hh0 * y, y2 = y + hh0 * k1y;
+            const k2y = a0 + b0 * x2 + x2 * x2 - x2 * y2 - x2 * x2 * x2 - x2 * x2 * y2;
+            const x3 = x + hh0 * y2, y3 = y + hh0 * k2y;
+            const k3y = a0 + b0 * x3 + x3 * x3 - x3 * y3 - x3 * x3 * x3 - x3 * x3 * y3;
+            const x4 = x + h0 * y3, y4 = y + h0 * k3y;
+            const k4y = a0 + b0 * x4 + x4 * x4 - x4 * y4 - x4 * x4 * x4 - x4 * x4 * y4;
+            x0 = x + h60 * (y + 2 * y2 + 2 * y3 + y4);
+            y0 = y + h60 * (k1y + 2 * k2y + 2 * k3y + k4y);
+          }
+          if (on1) {
+            const x = x1, y = y1;
+            const k1y = a1 + b1 * x + x * x - x * y - x * x * x - x * x * y;
+            const x2 = x + hh1 * y, y2 = y + hh1 * k1y;
+            const k2y = a1 + b1 * x2 + x2 * x2 - x2 * y2 - x2 * x2 * x2 - x2 * x2 * y2;
+            const x3 = x + hh1 * y2, y3 = y + hh1 * k2y;
+            const k3y = a1 + b1 * x3 + x3 * x3 - x3 * y3 - x3 * x3 * x3 - x3 * x3 * y3;
+            const x4 = x + h1 * y3, y4 = y + h1 * k3y;
+            const k4y = a1 + b1 * x4 + x4 * x4 - x4 * y4 - x4 * x4 * x4 - x4 * x4 * y4;
+            x1 = x + h61 * (y + 2 * y2 + 2 * y3 + y4);
+            y1 = y + h61 * (k1y + 2 * k2y + 2 * k3y + k4y);
+          }
+          if (on2) {
+            const q = z, v = zv;
+            const k1v = VDP_EPS * (muE - q * q) * v - q;
+            const q2 = q + hh2 * v, v2 = v + hh2 * k1v;
+            const k2v = VDP_EPS * (muE - q2 * q2) * v2 - q2;
+            const q3 = q + hh2 * v2, v3 = v + hh2 * k2v;
+            const k3v = VDP_EPS * (muE - q3 * q3) * v3 - q3;
+            const q4 = q + h2 * v3, v4 = v + h2 * k3v;
+            const k4v = VDP_EPS * (muE - q4 * q4) * v4 - q4;
+            z = q + h62 * (v + 2 * v2 + 2 * v3 + v4);
+            zv = v + h62 * (k1v + 2 * k2v + 2 * k3v + k4v);
+          }
+        }
+        let sum = 0;
+        if (on0) { pn0 = (x0 - cmean[0]) / crms[0]; sum += pn0 * crms[0] * cgain[0] * gs0; }
+        if (on1) { pn1 = (x1 - cmean[1]) / crms[1]; sum += pn1 * crms[1] * cgain[1] * gs1; }
+        if (on2) { pn2 = z / (2 * Math.sqrt(ca[2])); sum += pn2 * cgain[2] * gs2; }
+        out[i] += sum * gp * am;
+        if (tap !== null && tap.n < tap.len) { tap.s0[tap.n] = on0 ? pn0 * gs0 : 0; tap.s1[tap.n] = on1 ? pn1 * gs1 : 0; tap.s2[tap.n] = on2 ? pn2 * gs2 : 0; tap.n++; }
       }
       // a runaway state (should never happen) is reset rather than allowed to blow up
-      if (!(Math.abs(x) < 50 && Math.abs(y) < 50)) { x = 0; y = 0.01; }
-      s[0] = x; s[1] = y;
-      this.noise = noise;
-      this.a0 = a; this.b0 = b; this.g0 = gamma; this.gain0 = gain; this.mean0 = q.mean;
-      this.fNow = hz; this.regimeNow = reg; this.driveNow = d; this.sciNow = q.sci; this.gammaNow = gamma; this.subNow = sub;
+      if (!(Math.abs(x0) < 50 && Math.abs(y0) < 50)) { x0 = 0; y0 = 0.01; }
+      if (!(Math.abs(x1) < 50 && Math.abs(y1) < 50)) { x1 = 0; y1 = 0.01; }
+      if (!(Math.abs(z) < 50 && Math.abs(zv) < 50)) { z = 0.1; zv = 0; }
+      this.x[0] = x0; this.y[0] = y0; this.x[1] = x1; this.y[1] = y1; this.x[2] = z; this.y[2] = zv;
+      this.gs[0] = gs0; this.gs[1] = gs1; this.gs[2] = gs2; this.gp = gp;
+      this.noise[0] = n0; this.noise[1] = n1;
+      this.prevN[0] = pn0; this.prevN[1] = pn1; this.prevN[2] = pn2;
+      this.wobPh = wph;
+      // what the bench and tests read
+      const m = on0 ? S[0] : S[1];
+      this.subNow = sub; this.regimeNow = m.reg; this.driveNow = m.d; this.sciNow = m.sci; this.gammaNow = m.gamma;
     }
   }
 
@@ -321,10 +662,15 @@
       this.blkL = new Float32Array(BLOCK); this.blkR = new Float32Array(BLOCK); this.blkPos = BLOCK;
       this.ageCounter = 0; this.quietBlocks = 0;
       this.stack = [];
-      this.bendNorm = 0; this.bendOct = 0;
+      this.bendNorm = 0; this.bendOct = 0; this.tempo = 120;
       this.dc = { x: 0, y: 0, R: 1 - 2 * Math.PI * 10 / sampleRate };
       this.volSm = Math.pow(10, PARAMS[PINDEX.volume].def / 20);
       this.smooth = 1 - Math.exp(-BLOCK / (0.02 * sampleRate));
+      this.osTimeBase = 0; this.osTime = 0; this.onsets = null;
+      this.tap = null;                      // tests: { s0, s1, s2, n, len } to record each source
+      // per-block scratch shared by the voices (no allocation while running)
+      this.scratch = [0, 1, 2].map(() => ({ hz: 0, reg: 0, d: 0, b: 0, a: 0, slope: 0, gamma: 0, mean: 0, rms: 1, sci: 1, gain: 0 }));
+      for (const k of ['ca', 'cb', 'cg', 'cgain', 'cmean', 'crms', 'cd', 'da', 'db', 'dg', 'dgain', 'dmean', 'drms', 'dd']) this[k] = new Float64Array(3);
       const base = (seed >>> 0) || 0x9e3779b9;
       this.voices = [];
       for (let i = 0; i < MAX_VOICES; i++) this.voices.push(new Voice(this, (base + i * 0x6d2b79f5) >>> 0));
@@ -339,43 +685,89 @@
       if (i === undefined || !Number.isFinite(v)) return;
       const d = PARAMS[i];
       this.p[i] = clamp(d.step ? Math.round(v / d.step) * d.step : v, d.min, d.max);
-      if (id === 'mode') this.allNotesOff();
+      if (id === 'mode' || id === 'playmode' || id === 'topology') this.allNotesOff();
     }
     getParam(id) { return this.p[PINDEX[id]]; }
     setBend(norm) { this.bendNorm = clamp(norm, -1, 1); }
+    setTempo(bpm) { this.tempo = clamp(bpm, 20, 400); }
 
-    noteOn(note, vel) {
-      if (vel <= 0) { this.noteOff(note); return; }
+    // Duo and Independent drive one voice with a note per side
+    sideMode() { return Math.round(this.p[PINDEX.topology]) === 0 && Math.round(this.p[PINDEX.playmode]) >= 2; }
+    updateSides(vel) {
+      const v = this.voices[0], indep = Math.round(this.p[PINDEX.playmode]) === 3;
+      if (!indep) {
+        const held = this.stack.slice().sort((a, b) => a - b);
+        for (let s = 0; s < 2; s++) {
+          const n = held[s];
+          if (n === undefined) { v.sideHeld[s] = 0; continue; }
+          const legato = v.active() && v.sideHeld[s];
+          if (v.sideNote[s] !== n) v.setTarget(n, legato, s);
+          v.sideNote[s] = n; v.sideHeld[s] = 1;
+        }
+      }
+      if (v.sideHeld[0] || v.sideHeld[1]) { if (!v.active() || !v.held) v.trigger(vel); else if (vel > 0) v.vel = 0.2 + 0.8 * clamp(vel / 127, 0, 1); }
+      else v.release();
+    }
+
+    noteOn(note, vel, ch) {
+      if (vel <= 0) { this.noteOff(note, ch); return; }
+      if (this.sideMode()) {
+        const v = this.voices[0];
+        if (Math.round(this.p[PINDEX.playmode]) === 3) {
+          const s = (ch | 0) & 1;
+          v.setTarget(note, v.active() && v.sideHeld[s], s);
+          v.sideNote[s] = note; v.sideHeld[s] = 1;
+        } else {
+          const i = this.stack.indexOf(note); if (i >= 0) this.stack.splice(i, 1);
+          this.stack.push(note);
+        }
+        this.updateSides(vel);
+        return;
+      }
       if (this.p[PINDEX.mode] === 0) {
         const v = this.voices[0];
         const i = this.stack.indexOf(note); if (i >= 0) this.stack.splice(i, 1);
         this.stack.push(note);
         const legato = v.active() && v.held;
-        v.setTarget(note, legato);
+        v.setTarget(note, legato, -1);
         if (!legato) v.trigger(vel);
         else v.vel = 0.2 + 0.8 * clamp(vel / 127, 0, 1);
         return;
       }
-      for (const v of this.voices) if (v.active() && v.note === note) { v.setTarget(note, false); v.trigger(vel); return; }
+      for (const v of this.voices) if (v.active() && v.note === note) { v.setTarget(note, false, -1); v.trigger(vel); return; }
       let pick = null;
       for (const v of this.voices) if (!v.active()) { pick = v; break; }
       if (!pick) { for (const v of this.voices) if (!v.held && (!pick || v.age < pick.age)) pick = v; }
       if (!pick) { for (const v of this.voices) if (!pick || v.age < pick.age) pick = v; }
-      pick.setTarget(note, false);
+      pick.setTarget(note, false, -1);
       pick.trigger(vel);
     }
-    noteOff(note) {
+    noteOff(note, ch) {
+      if (this.sideMode()) {
+        const v = this.voices[0];
+        if (Math.round(this.p[PINDEX.playmode]) === 3) {
+          const s = (ch | 0) & 1;
+          if (v.sideNote[s] === note) v.sideHeld[s] = 0;
+        } else {
+          const i = this.stack.indexOf(note); if (i >= 0) this.stack.splice(i, 1);
+        }
+        this.updateSides(0);
+        return;
+      }
       if (this.p[PINDEX.mode] === 0) {
         const i = this.stack.indexOf(note); if (i >= 0) this.stack.splice(i, 1);
         const v = this.voices[0];
         if (!v.active() || v.note !== note) return;
-        if (this.stack.length) v.setTarget(this.stack[this.stack.length - 1], true);
+        if (this.stack.length) v.setTarget(this.stack[this.stack.length - 1], true, -1);
         else v.release();
         return;
       }
       for (const v of this.voices) if (v.note === note && v.held) v.release();
     }
-    allNotesOff() { this.stack.length = 0; for (const v of this.voices) v.release(); }
+    allNotesOff() {
+      this.stack.length = 0;
+      for (const v of this.voices) { v.release(); v.sideHeld.fill(0); }
+    }
 
     processBlock() {
       const d = this.dc;
@@ -384,6 +776,7 @@
         // idle: nothing sounds and the filters are empty
         this.blkL.fill(0); this.blkR.fill(0); d.x = d.y = 0;
         this.info.voices = 0; this.info.idle = true;
+        this.osTimeBase += BLOCK * OS;
         return;
       }
       this.bendOct = this.bendNorm * this.p[PINDEX.bendrange] / 12;
@@ -392,6 +785,7 @@
       o.fill(0);
       let count = 0;
       for (const v of this.voices) if (v.stage !== 0) { v.render(nOS, o); count++; }
+      this.osTimeBase += nOS;
       this.quietBlocks = count === 0 ? this.quietBlocks + 1 : 0;
       this.info.voices = count; this.info.idle = false;
       // decimate (symmetric FIR), DC block, volume, clip; mono for now, same on both sides
@@ -425,6 +819,7 @@
   SyrinxEngine.BLOCK = BLOCK; SyrinxEngine.OS = OS;
   SyrinxEngine.toNorm = toNorm; SyrinxEngine.fromNorm = fromNorm;
   SyrinxEngine.lookup = (r, d) => lookup(r, d, {});
+  SyrinxEngine.vdpFreq = vdpFreq; SyrinxEngine.podosBandwidth = podosBandwidth;
   if (typeof module !== 'undefined' && module.exports) module.exports = { SyrinxEngine, PARAMS, core };
   else root.SyrinxEngine = SyrinxEngine;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

@@ -177,7 +177,7 @@ const PLAIN = { grain: 0, link: 0, attack: 0.005, sustain: 1, decay: 0.05 };
 // 10. Breath bend: the pitch starts low and rises with the envelope
 {
   const { e } = render(48000, 0.02, e => { apply(e, { breathbend: 1, attack: 0.5, link: 0 }); e.noteOn(60, 100); });
-  const early = e.voices[0].fNow;
+  const early = e.voices[0].fNow[0];
   check('Breath bend starts below the note', cents(early, midiHz(96)) < -900, cents(early, midiHz(96)).toFixed(0) + ' cents at 20 ms');
 }
 
@@ -193,12 +193,153 @@ const PLAIN = { grain: 0, link: 0, attack: 0.005, sustain: 1, decay: 0.05 };
 {
   const { e } = render(48000, 0.5, e => { apply(e, { glide: 0.2 }); e.noteOn(60, 100); }, 128, (e, i) => { if (i === 9600) e.noteOn(67, 100); });
   const v = e.voices[0];
-  check('mono legato glides', Math.abs(cents(v.fNow, midiHz(103))) < 5, cents(v.fNow, midiHz(103)).toFixed(1) + ' cents from the new note after 0.3 s');
+  check('mono legato glides', Math.abs(cents(v.fNow[0], midiHz(103))) < 5, cents(v.fNow[0], midiHz(103)).toFixed(1) + ' cents from the new note after 0.3 s');
   const { e: p } = render(48000, 0.3, e => { apply(e, { mode: 1 }); e.noteOn(60, 100); e.noteOn(64, 100); e.noteOn(67, 100); });
   check('poly plays three notes', p.info.voices === 3);
 }
 
-check('15 parameters in batch 02', PARAMS.length === 15, PARAMS.length + '');
+/* ---------- batches 04–05: sources, play modes, coupling, breath, patterns ---------- */
+const OSR = 48000 * 4;
+function tapRun(params, seconds, notes, events) {
+  const e = new SyrinxEngine(48000, 1234);
+  apply(e, Object.assign({ grain: 0, sustain: 1, decay: 0.05, attack: 0.005, transpose: 24 }, params));
+  const len = Math.round(seconds * OSR);
+  e.tap = { s0: new Float32Array(len), s1: new Float32Array(len), s2: new Float32Array(len), n: 0, len };
+  e.onsets = [];
+  for (const [n, ch] of notes) e.noteOn(n, 100, ch || 0);
+  const N = Math.round(seconds * 48000), L = new Float32Array(N), bl = 128, tl = new Float32Array(bl), tr = new Float32Array(bl);
+  for (let i = 0; i < N; i += bl) { if (events) events(e, i); const m = Math.min(bl, N - i); e.process(tl, tr, m); L.set(tl.subarray(0, m), i); }
+  return { e, L, tap: e.tap };
+}
+function zfreq(x, sr, from, to) {
+  let m = 0; for (let i = from; i < to; i++) m += x[i]; m /= (to - from);
+  const cr = []; for (let i = from + 1; i < to; i++) if (x[i - 1] < m && x[i] >= m) cr.push(i - 1 + (m - x[i - 1]) / (x[i] - x[i - 1]));
+  return cr.length < 3 ? 0 : sr * (cr.length - 1) / (cr[cr.length - 1] - cr[0]);
+}
+function rms(x, from, to) { let s = 0; for (let i = from; i < to; i++) s += x[i] * x[i]; return Math.sqrt(s / Math.max(1, to - from)); }
+// the varying part only (a stopped source rests away from its running mean)
+function ac(x, from, to) { let m = 0; for (let i = from; i < to; i++) m += x[i]; m /= Math.max(1, to - from); let s = 0; for (let i = from; i < to; i++) s += (x[i] - m) ** 2; return Math.sqrt(s / Math.max(1, to - from)); }
+function tone(x, sr, f, from, to) {
+  let re = 0, im = 0; const n = to - from;
+  for (let i = from; i < to; i++) { const w = 0.5 - 0.5 * Math.cos(2 * Math.PI * (i - from) / n); re += w * x[i] * Math.cos(2 * Math.PI * f * i / sr); im += w * x[i] * Math.sin(2 * Math.PI * f * i / sr); }
+  return 2 * Math.sqrt(re * re + im * im) / n;
+}
+const corr = (a, b, from, to) => { let sx = 0, sy = 0, xy = 0; for (let i = from; i < to; i++) { sx += a[i] * a[i]; sy += b[i] * b[i]; xy += a[i] * b[i]; } return xy / Math.sqrt(sx * sy); };
+const late = (t) => [Math.round(0.5 * OSR), t.n];
+
+// 13. Handoff: below Split the left side sings, above it the right
+{
+  const lo = tapRun({ regime: 0.3, link: 0 }, 0.6, [[60]]);            // 1047 Hz
+  const hi = tapRun({ regime: 0.3, link: 0 }, 0.6, [[84]]);            // 4186 Hz
+  const [a, b] = late(lo.tap);
+  check('Handoff: low note on the left, high note on the right',
+    rms(lo.tap.s0, a, b) > 0.3 && rms(lo.tap.s1, a, b) === 0 && rms(hi.tap.s1, a, b) > 0.3 && rms(hi.tap.s0, a, b) === 0);
+  // a syllable sweeping up from 2 to 7 kHz starts on the left and ends on the right (cardinal)
+  const sw = tapRun({ pattern: 1, sylrate: 2, duty: 0.9, shape: 1, sweep: Math.log2(3.5), trill: 0, jitter: 0, minibreath: 0, link: 0, regime: 0.2 }, 0.45, [[71]]);   // 1976 Hz → 6.9 kHz
+  const t = sw.tap, q = (from, to) => [rms(t.s0, Math.round(from * OSR), Math.round(to * OSR)), rms(t.s1, Math.round(from * OSR), Math.round(to * OSR))];
+  const [eL, eR] = q(0.02, 0.05), [lL, lR] = q(0.35, 0.42);
+  check('Handoff mid-sweep: left early, right late', eL > 0.3 && eR < 0.05 && lR > 0.3 && lL < 0.05, 'early ' + eL.toFixed(2) + '/' + eR.toFixed(2) + ', late ' + lL.toFixed(2) + '/' + lR.toFixed(2));
+}
+
+// 14. Interval, Duo and Independent put the right notes on the sides
+{
+  const iv = tapRun({ playmode: 1, interval: 7.3, coupling: 0, regime: 0, link: 0 }, 0.6, [[60]]);
+  const [a, b] = late(iv.tap);
+  const fl = zfreq(iv.tap.s0, OSR, a, b), fr = zfreq(iv.tap.s1, OSR, a, b);
+  check('Interval: right side 7.3 semitones up', Math.abs(1200 * Math.log2(fr / fl) - 730) < 1, (1200 * Math.log2(fr / fl)).toFixed(2) + ' cents');
+  const duo = tapRun({ playmode: 2, coupling: 0, regime: 0, link: 0 }, 0.6, [[67], [60]]);
+  const dl = zfreq(duo.tap.s0, OSR, a, b), dr = zfreq(duo.tap.s1, OSR, a, b);
+  check('Duo: lower note left, higher right', Math.abs(cents(dl, midiHz(84))) < 2 && Math.abs(cents(dr, midiHz(91))) < 2, dl.toFixed(0) + ' / ' + dr.toFixed(0) + ' Hz');
+  const ind = tapRun({ playmode: 3, coupling: 0, regime: 0, link: 0 }, 0.6, [[64, 1], [60, 0]]);
+  const il = zfreq(ind.tap.s0, OSR, a, b), ir = zfreq(ind.tap.s1, OSR, a, b);
+  check('Independent: channel 1 left, channel 2 right', Math.abs(cents(il, midiHz(84))) < 2 && Math.abs(cents(ir, midiHz(88))) < 2, il.toFixed(0) + ' / ' + ir.toFixed(0) + ' Hz');
+}
+
+// 15. coupling: detuned sides lock; unlocked sides make sum and difference tones
+{
+  const f = (c) => { const r = tapRun({ playmode: 1, interval: 0.1, coupling: c, asym: 0, regime: 0, link: 0 }, 1, [[60]]); const [a, b] = late(r.tap); return 1200 * Math.log2(zfreq(r.tap.s1, OSR, a, b) / zfreq(r.tap.s0, OSR, a, b)); };
+  const free = f(0), locked = f(0.1);
+  check('Coupling locks sides 10 cents apart', Math.abs(free - 10) < 0.5 && Math.abs(locked) < 0.1, 'apart ' + free.toFixed(1) + ' → ' + locked.toFixed(2) + ' cents');
+  const comb = (c) => { const r = tapRun({ playmode: 1, interval: 7.3, coupling: c, asym: 0, regime: 0, link: 0 }, 1, [[60]]); const [a, b] = late(r.tap);
+    const fl = zfreq(r.tap.s0, OSR, a, b), fr = zfreq(r.tap.s1, OSR, a, b); return 20 * Math.log10(tone(r.L, 48000, fr - fl, 24000, 48000) / rms(r.L, 24000, 48000)); };
+  const d0 = comb(0), d3 = comb(0.3);
+  check('Coupling makes a difference tone', d0 < -100 && d3 > -50, d0.toFixed(0) + ' dB → ' + d3.toFixed(0) + ' dB re output');
+  const ph = (c) => { const r = tapRun({ playmode: 1, interval: 0, coupling: c, asym: 0, regime: 0, link: 0 }, 0.6, [[60]]); const [a, b] = late(r.tap); return corr(r.tap.s0, r.tap.s1, a, b); };
+  const weak = ph(0.1), strong = ph(0.6);
+  check('Identical tonal sides: anti-phase when weak, in phase when strong', weak < -0.8 && strong > 0.95, 'correlation ' + weak.toFixed(2) + ' → ' + strong.toFixed(2));
+}
+
+// 16. Single: folds lock at low Asymmetry and slip past about a semitone
+{
+  const s = (asym) => { const r = tapRun({ topology: 1, asym, regime: 0.2, link: 0 }, 1, [[60]]); const [a, b] = late(r.tap); return 1200 * Math.log2(zfreq(r.tap.s1, OSR, a, b) / zfreq(r.tap.s0, OSR, a, b)); };
+  const a2 = s(0.2), a6 = s(0.6);
+  check('Single: folds lock at Asymmetry 0.2, slip at 0.6', Math.abs(a2) < 0.1 && Math.abs(a6) > 5, a2.toFixed(2) + ' / ' + a6.toFixed(1) + ' cents apart');
+}
+
+// 17. Triple: a close membrane locks with the labia at a lower shared pitch; a far one does not
+{
+  const t = (mem, c) => { const r = tapRun({ topology: 2, membrane: mem, memlevel: 0.5, coupling: c, regime: 0.3, link: 0 }, 1, [[60]]); const [a, b] = late(r.tap); return [zfreq(r.tap.s0, OSR, a, b), zfreq(r.tap.s2, OSR, a, b)]; };
+  const [l0, m0] = t(-2, 0), [l1, m1] = t(-2, 0.3), [lf, mf] = t(-24, 0.3);
+  check('Triple: close membrane locks below the labial pitch', Math.abs(cents(l1, m1)) < 0.5 && l1 < l0 && l1 > m0, 'labia ' + l0.toFixed(0) + ' + membrane ' + m0.toFixed(0) + ' → both ' + l1.toFixed(0) + ' Hz');
+  check('Triple: far membrane keeps its own pitch', Math.abs(cents(mf, midiHz(84 - 24))) < 20 && Math.abs(cents(lf, midiHz(84))) < 20, lf.toFixed(0) + ' / ' + mf.toFixed(0) + ' Hz');
+  const off = tapRun({ topology: 2, memlevel: 0, regime: 0.3, link: 0 }, 0.4, [[60]]);
+  check('Triple: Membrane level 0 silences the membrane', rms(off.tap.s2, 0, off.tap.n) === 0);
+}
+
+// 18. patterns: onsets exact, the same at any buffer size, synced to tempo
+{
+  const r = tapRun({ pattern: 1, sylrate: 10, jitter: 0 }, 1.05, [[60]]);
+  const o = r.e.onsets, per = OSR / 10;
+  let worst = 0; for (let i = 1; i < o.length; i++) worst = Math.max(worst, Math.abs(o[i] - o[i - 1] - per));
+  check('Pattern: 10 syllables per second, onsets exact', o.length === 11 && worst <= 1, o.length + ' onsets, worst gap error ' + worst + ' samples at 4x');
+  const runs = [1, 64, 1000].map(bl => render(48000, 0.5, e => { apply(e, { pattern: 1, sylrate: 23, jitter: 0.5, grain: 0.3 }); e.noteOn(60, 100); }, bl).L);
+  let same = true; for (let i = 0; i < runs[0].length; i++) if (runs[0][i] !== runs[1][i] || runs[0][i] !== runs[2][i]) { same = false; break; }
+  check('Pattern with jitter: same output at buffer sizes 1, 64, 1000', same);
+  const sy = tapRun({ pattern: 1, sylrate: 7, sync: 1, jitter: 0 }, 1.05, [[60]]);   // 120 BPM: 4 per beat = 8/s
+  check('Sync: 7/s snaps to 4 per beat at 120 BPM', sy.e.onsets.length === 9, sy.e.onsets.length + ' onsets in 1.05 s');
+}
+
+// 19. gating: sound stops between syllables while the source keeps going; minibreaths stop the source
+{
+  const gaps = (mb, rate) => {
+    const r = tapRun({ pattern: 1, sylrate: rate, duty: 0.5, minibreath: mb, jitter: 0, regime: 0.3, link: 0 }, 1, [[60]]);
+    const per = OSR / rate; let outOn = 0, outOff = 0, srcOff = 0, nOn = 0, nOff = 0;
+    for (let k = 2; k < rate * 0.9; k++) {
+      const s = Math.round(k * per);
+      const on = [s + Math.round(0.15 * per), s + Math.round(0.4 * per)], off = [s + Math.round(0.75 * per), s + Math.round(0.95 * per)];
+      outOn += rms(r.L, Math.round(on[0] / 4), Math.round(on[1] / 4)); outOff += rms(r.L, Math.round(off[0] / 4), Math.round(off[1] / 4));
+      srcOff += ac(r.tap.s0, off[0], off[1]); nOn++; nOff++;
+    }
+    return [outOff / outOn, srcOff / nOff];
+  };
+  const [g0, s0] = gaps(0, 8), [g1, s1] = gaps(1, 8), [g2, s2] = gaps(1, 40);
+  check('Gating: silent between syllables, source still running', g0 < 0.01 && s0 > 0.3, 'off/on ' + g0.toExponential(1) + ', source ' + s0.toFixed(2));
+  check('Minibreath: the source stops between slow syllables', s1 < 0.1, 'source ' + s1.toFixed(3));
+  check('Minibreath fades out above 30 per second', s2 > 0.3, 'source at 40/s ' + s2.toFixed(2));
+}
+
+// 20. trill limit follows Podos's line; Alternate swaps sides per syllable
+{
+  const r = tapRun({ pattern: 1, sylrate: 20, sweep: 3, shape: 1, trill: 1, jitter: 0 }, 0.2, [[60]]);
+  const v = r.e.voices[0], f = Math.pow(2, v.logF[0]);
+  const bw = f * (Math.pow(2, v.sylSweep) - 1), lim = SyrinxEngine.podosBandwidth(20);
+  check('Trill limit: a 20/s trill sweeps at most Podos bandwidth', Math.abs(bw - lim) < 1 && v.sylSweep < 3, 'sweep ' + v.sylSweep.toFixed(3) + ' oct, ' + bw.toFixed(0) + ' Hz (line ' + lim.toFixed(0) + ' Hz)');
+  const alt = tapRun({ pattern: 1, sylrate: 10, sides: 3, duty: 0.8, jitter: 0, regime: 0.3, link: 0 }, 0.4, [[60]]);
+  const seg = (k, s) => rms(s, Math.round((k + 0.3) * OSR / 10), Math.round((k + 0.7) * OSR / 10));
+  check('Alternate: syllables switch sides', seg(1, alt.tap.s1) > 0.3 && seg(1, alt.tap.s0) < 0.05 && seg(2, alt.tap.s0) > 0.3 && seg(2, alt.tap.s1) < 0.05);
+}
+
+// 21. Wobble: amplitude modulation at its rate makes sidebands; pitch modulation keeps the centre
+{
+  const r = tapRun({ wobblerate: 160, wobble: 0.8, wobblefm: 0, regime: 0, link: 0 }, 0.8, [[60]]);
+  const f0 = midiHz(84), c = tone(r.L, 48000, f0, 12000, 38400), sb = tone(r.L, 48000, f0 + 160, 12000, 38400);
+  check('Wobble (amplitude): sidebands at ±160 Hz', sb / c > 0.1, (20 * Math.log10(sb / c)).toFixed(1) + ' dB');
+  const fm = tapRun({ wobblerate: 160, wobble: 0.5, wobblefm: 1, regime: 0, link: 0 }, 0.8, [[60]]);
+  const want = midiHz(84), got = pitch(fm.L.subarray(12000, 38400), 48000, want / 1.5, want * 1.5);
+  check('Wobble (pitch): centre stays on the note', Math.abs(cents(got, want)) < 5, cents(got, want).toFixed(2) + ' cents');
+}
+
+check('38 parameters after batch 05', PARAMS.length === 38, PARAMS.length + '');
 
 console.log(failed ? failed + ' failed' : 'all passed');
 process.exit(failed ? 1 : 0);
